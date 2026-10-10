@@ -75,6 +75,7 @@ If you have any issues or you want to contribute, you are welcome! But please be
 
 ## Main differences from the original repository:
 
+<<<<<<< HEAD
 - Improve the logging - Emoji, colors, file and soo on
 - Final report with all the data
 - Rewrite the entire code using classe instead of module with global variables
@@ -85,6 +86,20 @@ If you have any issues or you want to contribute, you are welcome! But please be
 No browser needed. [#41](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/41) ([@lay295](https://github.com/lay295))
 - Analytics chart that show the progress of your points with various annotations [#96](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/96)
 - Join IRC Chat for increase watch-time and get StreamElements points [#47](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/47)
+=======
+- Improved logging: emojis, colors, files and much more ✔️
+- Final report with all the data ✔️
+- Rewritten codebase now uses classes instead of modules with global variables ✔️
+- Automatic downloading of the list of followers and using it as an input ✔️
+- Better 'Watch Streak' strategy in the priority system [#11](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/11) ✔️
+- Auto claiming [game drops](https://help.twitch.tv/s/article/mission-based-drops) from the Twitch inventory [#21](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/21) ✔️
+- Discovering campaign channels with unclaimed timed drops, even when they are not in the configured streamer list ✔️
+- Placing a bet / making a prediction with your channel points [#41](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/41) ([@lay295](https://github.com/lay295)) ✔️
+- Switchable analytics chart that shows the progress of your points with various annotations [#96](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/96) ✔️
+- Joining the IRC Chat to increase the watch time and get StreamElements points [#47](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/47) ✔️
+- [Moments](https://help.twitch.tv/s/article/moments) claiming [#182](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2/issues/182) ✔️
+- Notifying on `@nickname` mention in the Twitch chat [#227](https://github.com/rdavydov/Twitch-Channel-Points-Miner-v2/issues/227) ✔️
+>>>>>>> 7c2be03 (Test)
 
 ## Logs feature
 ### Full logs
@@ -235,7 +250,13 @@ twitch_miner = TwitchChannelPointsMiner(
         make_predictions=True,                  # If you want to Bet / Make prediction
         follow_raid=True,                       # Follow raid to obtain more points
         claim_drops=True,                       # We can't filter rewards base on stream. Set to False for skip viewing counter increase and you will never obtain a drop reward from this script. Issue #21
+<<<<<<< HEAD
         watch_streak=True,                      # If a streamer go online change the priority of streamers array and catch the watch screak. Issue #11
+=======
+        claim_moments=True,                     # If set to True, https://help.twitch.tv/s/article/moments will be claimed when available
+        watch_streak=True,                      # Prioritize eligible returning streams until Twitch confirms the reward or 7 watched minutes are reached. Issue #11
+        community_goals=False,                  # If True, contributes the max channel points per stream to the streamers' community challenge goals
+>>>>>>> 7c2be03 (Test)
         chat=ChatPresence.ONLINE,               # Join irc chat to increase watch-time [ALWAYS, NEVER, ONLINE, OFFLINE]
         bet=BetSettings(
             strategy=Strategy.SMART,            # Choose you strategy!
@@ -360,7 +381,42 @@ docker run \
 
 `$(pwd)` Could not work on Windows (cmd), please use the absolute path instead, like: `/path/of/your/cookies:/usr/src/app/cookies`.
 If you don't mount the volume for the analytics (or cookies or logs) folder, the folder will be automatically created on the Docker container, and you will lose all the data when it is stopped.
+<<<<<<< HEAD
 If you don't have a cookie or It's your first time running the script, you will need to login to Twitch and start the container with `-it` args. If you need to run multiple containers you can bind different ports (only if you need also the analytics) and mount dirrent run.py file, like
+=======
+
+#### Your own GitHub image on Unraid
+
+To publish your own image instead of using the Docker Hub image:
+
+1. Fork this repository to your GitHub account. The `Publish Docker image to GHCR` workflow builds and publishes the image on pushes to your fork. It tags the default branch as `latest`, and also publishes branch, version, and commit tags.
+2. In the fork, open **Actions** and enable workflows if GitHub prompts you to do so. After the first successful run, open the package under your GitHub profile and change its visibility to **Public** so Unraid can pull it without credentials.
+3. In Unraid, add a container and use `ghcr.io/<your-github-user>/twitch-channel-points-miner-v2:latest` as the repository/image. Alternatively, use this image in a Compose/Portainer stack:
+
+```yml
+services:
+  miner:
+    image: ghcr.io/<your-github-user>/twitch-channel-points-miner-v2:latest
+    stdin_open: true
+    tty: true
+    environment:
+      TERM: xterm-256color
+    volumes:
+      - /mnt/user/appdata/twitch-channel-points-miner-v2/analytics:/usr/src/app/analytics
+      - /mnt/user/appdata/twitch-channel-points-miner-v2/cookies:/usr/src/app/cookies
+      - /mnt/user/appdata/twitch-channel-points-miner-v2/logs:/usr/src/app/logs
+      - /mnt/user/appdata/twitch-channel-points-miner-v2/run.py:/usr/src/app/run.py:ro
+    ports:
+      - "5000:5000"
+```
+
+Create your own `run.py` in the appdata directory before starting the container; the image expects it to be mounted there. Keep that file and the data directories in appdata so they survive image updates. Do not put Twitch credentials or other secrets in a public repository.
+
+To update, pull/recreate the container in Unraid after a new image is published. If you use a private GHCR package, configure registry credentials in Unraid instead of making the package public.
+
+If you don't have a cookie or it's your first time running the script, you will need to login to Twitch and start the container with `-it` args. If you need to run multiple containers you can bind different ports (only if you need also the analytics) and mount dirrent run.py file, like
+
+>>>>>>> 7c2be03 (Test)
 ```sh
 docker run --name user1-v $(pwd)/user1.py:/usr/src/app/run.py:ro -p 5001:5000 tkdalex/twitch-channel-points-miner-v2
 ```
@@ -381,7 +437,7 @@ Most of the settings are self-explained and are commented on in the example.
 You can watch only two streamers per time. With `priority` settings, you can select which streamers watch by use priority. You can use an array of priority or single item. I suggest using at least one priority from `ORDER`, `POINTS_ASCENDING`, `POINTS_DESCEDING` because, for example, If you set only `STREAK` after catch all watch streak, the script will stop to watch streamers.
 Available values are the following:
  - `STREAK` - Catch the watch streak from all streamers
- - `DROPS` - Claim all drops from streamers with drops tags enabled
+ - `DROPS` - Prioritize configured streamers and automatically discovered campaign channels with active, unclaimed timed drops. Discovery uses the channel IDs Twitch provides for each campaign.
  - `SUBSCRIBED` - Prioritize streamers you're subscribed to (higher subscription tiers are mined first)
  - `ORDER` - Following the order of the list
  - `POINTS_ASCENDING` - On top the streamers with the lowest points
