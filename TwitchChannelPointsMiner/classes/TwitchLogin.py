@@ -148,8 +148,37 @@ class TwitchLogin(object):
         self.session.headers.update({"Authorization": f"Bearer {self.token}"})
 
     def send_login_request(self, json_data):
-        response = self.session.post("https://passport.twitch.tv/login", json=json_data)
-        return response.json()
+        try:
+            response = self.session.post(
+                "https://passport.twitch.tv/login",
+                json=json_data,
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as error:
+            status_code = (
+                error.response.status_code if error.response is not None else "unknown"
+            )
+            raise RuntimeError(
+                f"Twitch login endpoint returned HTTP {status_code}. "
+                "Check Twitch availability and the container's network/proxy settings."
+            ) from error
+        except requests.exceptions.RequestException as error:
+            raise RuntimeError(
+                "Could not reach the Twitch login endpoint. Check the container's "
+                "network/DNS/TLS connection and try again."
+            ) from error
+
+        try:
+            return response.json()
+        except ValueError as error:
+            content_type = response.headers.get("Content-Type", "unknown")
+            raise RuntimeError(
+                "Twitch login endpoint returned a non-JSON response "
+                f"(HTTP {response.status_code}, Content-Type: {content_type}). "
+                "This may be a temporary Twitch response, network/proxy filtering, "
+                "or a changed login endpoint. The response body was not logged."
+            ) from error
 
     def login_flow_backup(self):
         """Backup OAuth login flow in case manual captcha solving is required"""
