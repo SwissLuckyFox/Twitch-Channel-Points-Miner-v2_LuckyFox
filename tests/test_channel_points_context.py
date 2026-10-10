@@ -6,7 +6,7 @@ from TwitchChannelPointsMiner.classes.Exceptions import (
     UnexpectedTwitchResponseException,
 )
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
-from TwitchChannelPointsMiner.constants import GQLOperations
+from TwitchChannelPointsMiner.constants import CLIENT_ID, CLIENT_VERSION, GQLOperations
 
 
 class ChannelPointsContextTests(unittest.TestCase):
@@ -108,6 +108,29 @@ class ChannelPointsContextTests(unittest.TestCase):
         }
 
         self.assertEqual(self.twitch.get_followers(), ["somefollower"])
+
+    @patch("TwitchChannelPointsMiner.classes.Twitch.requests.post")
+    def test_graphql_request_includes_client_integrity_context_headers(self, post):
+        post.return_value.json.return_value = {"data": {}}
+        self.twitch.user_agent = "test-user-agent"
+        self.twitch.device_id = "device-id"
+        self.twitch.client_session = "session-id"
+        self.twitch.twitch_login = Mock()
+        self.twitch.twitch_login.get_auth_token.return_value = "test-token"
+
+        self.twitch.post_gql_request({"operationName": "test"})
+
+        self.assertEqual(
+            post.call_args.kwargs["headers"],
+            {
+                "Authorization": "OAuth test-token",
+                "Client-Id": CLIENT_ID,
+                "Client-Session-Id": "session-id",
+                "Client-Version": CLIENT_VERSION,
+                "User-Agent": "test-user-agent",
+                "X-Device-Id": "device-id",
+            },
+        )
 
     def test_nonexistent_channel_raises_specific_exception(self):
         self.twitch.post_gql_request.return_value = {"data": {"community": None}}

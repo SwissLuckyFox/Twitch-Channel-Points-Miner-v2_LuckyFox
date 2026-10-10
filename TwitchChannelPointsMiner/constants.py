@@ -4,6 +4,7 @@ IRC = "irc.chat.twitch.tv"
 IRC_PORT = 6667
 WEBSOCKET = "wss://pubsub-edge.twitch.tv/v1"
 CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+CLIENT_VERSION = "ef928475-9403-42f2-8a34-55784bd08e16"
 DROP_ID = "c2542d6d-cd10-4532-919b-3d19f30a768b"
 
 USER_AGENTS = {

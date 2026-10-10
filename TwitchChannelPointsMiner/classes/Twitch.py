@@ -34,7 +34,7 @@ from TwitchChannelPointsMiner.classes.Settings import (
     Settings,
 )
 from TwitchChannelPointsMiner.classes.TwitchLogin import TwitchLogin
-from TwitchChannelPointsMiner.constants import CLIENT_ID, GQLOperations
+from TwitchChannelPointsMiner.constants import CLIENT_ID, CLIENT_VERSION, GQLOperations
 from TwitchChannelPointsMiner.utils import (
     _millify,
     create_chunks,
@@ -69,13 +69,22 @@ def _graphql_error_details(response):
 
 
 class Twitch(object):
-    __slots__ = ["cookies_file", "user_agent", "twitch_login", "running"]
+    __slots__ = [
+        "cookies_file",
+        "user_agent",
+        "twitch_login",
+        "running",
+        "device_id",
+        "client_session",
+    ]
 
     def __init__(self, username, user_agent, password=None):
         cookies_path = os.path.join(Path().absolute(), "cookies")
         Path(cookies_path).mkdir(parents=True, exist_ok=True)
         self.cookies_file = os.path.join(cookies_path, f"{username}.pkl")
         self.user_agent = user_agent
+        self.device_id = token_hex(16)
+        self.client_session = token_hex(16)
         self.twitch_login = TwitchLogin(
             CLIENT_ID, username, self.user_agent, password=password
         )
@@ -316,7 +325,10 @@ class Twitch(object):
                 headers={
                     "Authorization": f"OAuth {self.twitch_login.get_auth_token()}",
                     "Client-Id": CLIENT_ID,
+                    "Client-Session-Id": self.client_session,
+                    "Client-Version": CLIENT_VERSION,
                     "User-Agent": self.user_agent,
+                    "X-Device-Id": self.device_id,
                 },
             )
             logger.debug(
