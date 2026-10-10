@@ -18,7 +18,10 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import (
     Streamer,
     StreamerSettings,
 )
-from TwitchChannelPointsMiner.classes.Exceptions import StreamerDoesNotExistException
+from TwitchChannelPointsMiner.classes.Exceptions import (
+    StreamerDoesNotExistException,
+    UnexpectedTwitchResponseException,
+)
 from TwitchChannelPointsMiner.classes.Settings import FollowersOrder, Priority, Settings
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.classes.WebSocketsPool import WebSocketsPool
@@ -231,11 +234,34 @@ class TwitchChannelPointsMiner:
             # 1. Load channel points and auto-claim bonus
             # 2. Check if streamers are online
             # 3. DEACTIVATED: Check if the user is a moderator. (was used before the 5th of April 2021 to deactivate predictions)
+            initialized_streamers = []
             for streamer in self.streamers:
                 time.sleep(random.uniform(0.3, 0.7))
-                self.twitch.load_channel_points_context(streamer)
+                try:
+                    self.twitch.load_channel_points_context(streamer)
+                except StreamerDoesNotExistException:
+                    logger.warning(
+                        f"Skipping {streamer.username}: Twitch reports that the "
+                        "channel does not exist.",
+                        extra={"emoji": ":warning:"},
+                    )
+                    continue
+                except UnexpectedTwitchResponseException as error:
+                    logger.error(
+                        f"Skipping {streamer.username}: {error}",
+                        extra={"emoji": ":warning:"},
+                    )
+                    continue
+
                 self.twitch.check_streamer_online(streamer)
-                # self.twitch.viewer_is_mod(streamer)
+                initialized_streamers.append(streamer)
+
+            self.streamers = initialized_streamers
+            if not self.streamers:
+                raise RuntimeError(
+                    "Could not initialize any configured streamer. Verify the "
+                    "streamers.txt entries and Twitch connectivity, then restart."
+                )
 
             self.original_streamers = [
                 streamer.channel_points for streamer in self.streamers

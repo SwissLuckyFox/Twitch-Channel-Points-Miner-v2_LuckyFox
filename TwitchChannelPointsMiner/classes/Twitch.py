@@ -25,6 +25,7 @@ from TwitchChannelPointsMiner.classes.Chat import ChatPresence
 from TwitchChannelPointsMiner.classes.Exceptions import (
     StreamerDoesNotExistException,
     StreamerIsOfflineException,
+    UnexpectedTwitchResponseException,
 )
 from TwitchChannelPointsMiner.classes.Settings import (
     Events,
@@ -468,16 +469,38 @@ class Twitch(object):
         json_data["variables"] = {"channelLogin": streamer.username}
 
         response = self.post_gql_request(json_data)
-        if response != {}:
-            if response["data"]["community"] is None:
-                raise StreamerDoesNotExistException
-            channel = response["data"]["community"]["channel"]
-            community_points = channel["self"]["communityPoints"]
-            streamer.channel_points = community_points["balance"]
-            streamer.activeMultipliers = community_points["activeMultipliers"]
+        if not isinstance(response, dict) or not isinstance(response.get("data"), dict):
+            raise UnexpectedTwitchResponseException(
+                f"Twitch returned no GraphQL data while loading channel points for "
+                f"{streamer.username}."
+            )
 
-            if community_points["availableClaim"] is not None:
-                self.claim_bonus(streamer, community_points["availableClaim"]["id"])
+        community = response["data"].get("community")
+        if community is None:
+            raise StreamerDoesNotExistException
+        if not isinstance(community, dict):
+            raise UnexpectedTwitchResponseException(
+                f"Twitch returned an invalid community response while loading "
+                f"channel points for {streamer.username}."
+            )
+
+        try:
+            community_points = community["channel"]["self"]["communityPoints"]
+            balance = community_points["balance"]
+            active_multipliers = community_points["activeMultipliers"]
+            available_claim = community_points["availableClaim"]
+            claim_id = available_claim["id"] if available_claim is not None else None
+        except (KeyError, TypeError) as error:
+            raise UnexpectedTwitchResponseException(
+                f"Twitch returned incomplete channel points data for "
+                f"{streamer.username}."
+            ) from error
+
+        streamer.channel_points = balance
+        streamer.activeMultipliers = active_multipliers
+
+        if claim_id is not None:
+            self.claim_bonus(streamer, claim_id)
 
     def make_predictions(self, event):
         decision = event.bet.calculate(event.streamer.channel_points)

@@ -647,3 +647,5 @@ This project comes with no guarantee or warranty. You are responsible for whatev
 This fork is an independent code version; changes from the original repository do not automatically update its API. Configuration examples must match the classes and parameters implemented in this fork.
 
 The GHCR workflow builds the Docker image and runs Python compilation and configuration compatibility tests before publishing it. Pull requests targeting `master` run the same checks without publishing an image. Protect the `master` branch and require the workflow's `verify` job to pass if you want GitHub to prevent untested changes from being merged.
+
+During startup, channels Twitch reports as nonexistent are skipped. If Twitch returns an incomplete GraphQL response while loading one channel's points, that channel is skipped with an error message instead of terminating initialization for all other channels.
