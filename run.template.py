@@ -98,78 +98,75 @@ def optional_discord():
     )
 
 
-username = os.getenv("TWITCH_USERNAME", "").strip()
-if not username:
-    logger.error("TWITCH_USERNAME is required; set it in the Unraid container variables.")
-    raise SystemExit(2)
+def build_miner_kwargs():
+    username = os.getenv("TWITCH_USERNAME", "").strip()
+    if not username:
+        raise ValueError(
+            "TWITCH_USERNAME is required; set it in the Unraid container variables."
+        )
 
-twitch_miner = TwitchChannelPointsMiner(
-    username=username,
-    password=os.getenv("TWITCH_PASSWORD") or None,
-    claim_drops_startup=False,
-    priority=[
-        Priority.DROPS,
-        Priority.STREAK,
-        Priority.ORDER,
-        Priority.SUBSCRIBED,
-    ],
-    enable_analytics=True,
-    disable_ssl_cert_verification=False,
-    logger_settings=LoggerSettings(
-        save=True,
-        console_level=logging.INFO,
-        console_username=False,
-        auto_clear=True,
-        time_zone="",
-        file_level=logging.INFO,
-        emoji=True,
-        less=True,
-        colored=True,
-        color_palette=ColorPalette(
-            STREAMER_ONLINE=Fore.GREEN,
-            STREAMER_OFFLINE=Fore.RED,
-            GAIN_FOR_RAID=Fore.YELLOW,
-            GAIN_FOR_CLAIM=Fore.YELLOW,
-            GAIN_FOR_WATCH=Fore.YELLOW,
-            GAIN_FOR_WATCH_STREAK=Fore.YELLOW,
-            BET_WIN=Fore.MAGENTA,
-            BET_LOSE=Fore.RED,
-            BET_REFUND=Fore.RESET,
-            BET_FILTERS=Fore.MAGENTA,
-            BET_GENERAL=Fore.BLUE,
-            BET_FAILED=Fore.RED,
+    return {
+        "username": username,
+        "password": os.getenv("TWITCH_PASSWORD") or None,
+        "claim_drops_startup": False,
+        "priority": [
+            Priority.DROPS,
+            Priority.STREAK,
+            Priority.ORDER,
+            Priority.SUBSCRIBED,
+        ],
+        "logger_settings": LoggerSettings(
+            save=True,
+            console_level=logging.INFO,
+            auto_clear=True,
+            file_level=logging.INFO,
+            emoji=True,
+            less=True,
+            colored=True,
+            color_palette=ColorPalette(
+                STREAMER_ONLINE=Fore.GREEN,
+                STREAMER_OFFLINE=Fore.RED,
+                GAIN_FOR_RAID=Fore.YELLOW,
+                GAIN_FOR_CLAIM=Fore.YELLOW,
+                GAIN_FOR_WATCH=Fore.YELLOW,
+                GAIN_FOR_WATCH_STREAK=Fore.YELLOW,
+                BET_WIN=Fore.MAGENTA,
+                BET_LOSE=Fore.RED,
+                BET_REFUND=Fore.RESET,
+                BET_FILTERS=Fore.MAGENTA,
+                BET_GENERAL=Fore.BLUE,
+                BET_FAILED=Fore.RED,
+            ),
+            telegram=optional_telegram(),
+            discord=optional_discord(),
         ),
-        telegram=optional_telegram(),
-        discord=optional_discord(),
-    ),
-    streamer_settings=StreamerSettings(
-        make_predictions=False,
-        follow_raid=True,
-        claim_drops=True,
-        watch_streak=True,
-        chat=ChatPresence.NEVER,
-        bet=BetSettings(
-            strategy=Strategy.SMART,
-            percentage=5,
-            percentage_gap=20,
-            max_points=50000,
-            stealth_mode=True,
-            delay_mode=DelayMode.FROM_END,
-            delay=6,
-            minimum_points=100000,
-            filter_condition=FilterCondition(
-                by=OutcomeKeys.TOTAL_USERS,
-                where=Condition.LTE,
-                value=800,
+        "streamer_settings": StreamerSettings(
+            make_predictions=False,
+            follow_raid=True,
+            claim_drops=True,
+            watch_streak=True,
+            chat=ChatPresence.NEVER,
+            bet=BetSettings(
+                strategy=Strategy.SMART,
+                percentage=5,
+                percentage_gap=20,
+                max_points=50000,
+                stealth_mode=True,
+                delay_mode=DelayMode.FROM_END,
+                delay=6,
+                minimum_points=100000,
+                filter_condition=FilterCondition(
+                    by=OutcomeKeys.TOTAL_USERS,
+                    where=Condition.LTE,
+                    value=800,
+                ),
             ),
         ),
-    ),
-)
+    }
 
-twitch_miner.analytics(host="0.0.0.0", port=5000, refresh=5, days_ago=7)
 
-twitch_miner.mine(
-    [
+def build_streamers():
+    return [
         Streamer(
             "corgicam",
             settings=StreamerSettings(chat=ChatPresence.ONLINE),
@@ -189,7 +186,24 @@ twitch_miner.mine(
         Streamer("litheoss"),
         Streamer("merlekoz"),
         Streamer("ivydafurry"),
-    ],
-    followers=True,
-    followers_order=FollowersOrder.ASC,
-)
+    ]
+
+
+def main():
+    try:
+        miner_kwargs = build_miner_kwargs()
+    except ValueError as error:
+        logger.error("%s", error)
+        raise SystemExit(2) from error
+
+    twitch_miner = TwitchChannelPointsMiner(**miner_kwargs)
+    twitch_miner.analytics(host="0.0.0.0", port=5000, refresh=5, days_ago=7)
+    twitch_miner.mine(
+        build_streamers(),
+        followers=True,
+        followers_order=FollowersOrder.ASC,
+    )
+
+
+if __name__ == "__main__":
+    main()

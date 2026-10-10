@@ -4,15 +4,45 @@ on:
   push:
     branches: [master]
     tags: ["v*"]
+  pull_request:
+    branches: [master]
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
-  publish:
+  verify:
     runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image for validation
+        run: docker build --tag twitch-channel-points-miner:validation .
+
+      - name: Compile project and test run template in Docker
+        run: |
+          docker run --rm \
+            --mount "type=bind,source=${GITHUB_WORKSPACE}/run.template.py,target=/usr/src/app/run.template.py,readonly" \
+            --mount "type=bind,source=${GITHUB_WORKSPACE}/tests,target=/tmp/tests,readonly" \
+            --entrypoint python \
+            twitch-channel-points-miner:validation \
+            -m compileall -q /usr/src/app/TwitchChannelPointsMiner
+          docker run --rm \
+            --mount "type=bind,source=${GITHUB_WORKSPACE}/run.template.py,target=/usr/src/app/run.template.py,readonly" \
+            --mount "type=bind,source=${GITHUB_WORKSPACE}/tests,target=/tmp/tests,readonly" \
+            --entrypoint python \
+            twitch-channel-points-miner:validation \
+            -m unittest discover -s /tmp/tests -v
+
+  publish:
+    needs: verify
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

@@ -640,3 +640,8 @@ Read more at [#92](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/is
 
 ## Disclaimer
 This project comes with no guarantee or warranty. You are responsible for whatever happens from using this project. It is possible to get soft or hard banned by using this project if you are not careful. This is a personal project and is in no way affiliated with Twitch.
+
+## Fork compatibility and Docker validation
+This fork is an independent code version; changes from the original repository do not automatically update its API. Configuration examples must match the classes and parameters implemented in this fork.
+
+The GHCR workflow builds the Docker image and runs Python compilation and configuration compatibility tests before publishing it. Pull requests targeting `master` run the same checks without publishing an image. Protect the `master` branch and require the workflow's `verify` job to pass if you want GitHub to prevent untested changes from being merged.
