@@ -11,11 +11,11 @@ from TwitchChannelPointsMiner.constants import CLIENT_ID, CLIENT_VERSION, GQLOpe
 
 class ChannelPointsContextTests(unittest.TestCase):
     def setUp(self):
-        post_gql_patcher = patch.object(Twitch, "post_gql_request")
+        self.post_gql_patcher = patch.object(Twitch, "post_gql_request")
         claim_bonus_patcher = patch.object(Twitch, "claim_bonus")
-        self.post_gql_request = post_gql_patcher.start()
+        self.post_gql_request = self.post_gql_patcher.start()
         self.claim_bonus = claim_bonus_patcher.start()
-        self.addCleanup(post_gql_patcher.stop)
+        self.addCleanup(self.post_gql_patcher.stop)
         self.addCleanup(claim_bonus_patcher.stop)
         self.streamer = Mock()
         self.streamer.username = "test_channel"
@@ -118,6 +118,7 @@ class ChannelPointsContextTests(unittest.TestCase):
         self.twitch.twitch_login = Mock()
         self.twitch.twitch_login.get_auth_token.return_value = "test-token"
 
+        self.post_gql_patcher.stop()
         Twitch.post_gql_request(self.twitch, {"operationName": "test"})
 
         self.assertEqual(
