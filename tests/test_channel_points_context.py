@@ -118,7 +118,7 @@ class ChannelPointsContextTests(unittest.TestCase):
         self.twitch.twitch_login = Mock()
         self.twitch.twitch_login.get_auth_token.return_value = "test-token"
 
-        self.twitch.post_gql_request({"operationName": "test"})
+        Twitch.post_gql_request(self.twitch, {"operationName": "test"})
 
         self.assertEqual(
             post.call_args.kwargs["headers"],
