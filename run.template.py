@@ -109,7 +109,6 @@ def build_miner_kwargs():
 
     return {
         "username": username,
-        "password": os.getenv("TWITCH_PASSWORD") or None,
         "claim_drops_startup": False,
         "priority": [
             Priority.DROPS,

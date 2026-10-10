@@ -3,7 +3,7 @@ URL = "https://www.twitch.tv"
 IRC = "irc.chat.twitch.tv"
 IRC_PORT = 6667
 WEBSOCKET = "wss://pubsub-edge.twitch.tv/v1"
-CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+CLIENT_ID = "ue6666qo983tsx6so1t0vnawi233wa"
 CLIENT_VERSION = "ef928475-9403-42f2-8a34-55784bd08e16"
 DROP_ID = "c2542d6d-cd10-4532-919b-3d19f30a768b"
 
@@ -16,11 +16,15 @@ USER_AGENTS = {
         "CHROME": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.96 Safari/537.36",
         "FIREFOX": "Mozilla/5.0 (X11; Linux x86_64; rv:85.0) Gecko/20100101 Firefox/85.0",
     },
+    "Android": {
+        "TV": "Mozilla/5.0 (Linux; Android 7.1; Smart Box C1) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+    },
 }
 
 BRANCH = "master"
 GITHUB_url = (
-    "https://raw.githubusercontent.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/"
+    "https://raw.githubusercontent.com/rdavydov/Twitch-Channel-Points-Miner-v2/"
     + BRANCH
 )
 
@@ -41,7 +45,7 @@ class GQLOperations:
         "extensions": {
             "persistedQuery": {
                 "version": 1,
-                "sha256Hash": "a5f2e34d626a9f4f5c0204f910bab2194948a9502089be558bb6e779a9e1b3d2",
+                "sha256Hash": "198492e0857f6aedead9665c81c5a06d67b25b58034649687124083ff288597d",
             }
         },
     }
@@ -59,7 +63,7 @@ class GQLOperations:
         "extensions": {
             "persistedQuery": {
                 "version": 1,
-                "sha256Hash": "2f884fa187b8fadb2a49db0adc033e636f7b6aaee6e76de1e2bba9a7baf0daf6",
+                "sha256Hash": "a455deea71bdc9015b78eb49f4acfbce8baa7ccbedd28e549bb025bd0f751930",
             }
         },
     }
@@ -92,11 +96,11 @@ class GQLOperations:
     }
     Inventory = {
         "operationName": "Inventory",
-        "variables": {},
+        "variables": {"fetchRewardCampaigns": True},
         "extensions": {
             "persistedQuery": {
                 "version": 1,
-                "sha256Hash": "e0765ebaa8e8eeb4043cc6dfeab3eac7f682ef5f724b81367e6e55c7aef2be4c",
+                "sha256Hash": "d86775d0ef16a63a33ad52e80eaff963b2d5b72fada7c991504a57496e1d8e4b",
             }
         },
     }
@@ -111,11 +115,11 @@ class GQLOperations:
     }
     ViewerDropsDashboard = {
         "operationName": "ViewerDropsDashboard",
-        "variables": {},
+        "variables": {"fetchRewardCampaigns": True},
         "extensions": {
             "persistedQuery": {
                 "version": 1,
-                "sha256Hash": "c4d61d7b71d03b324914d3cf8ca0bc23fe25dacf54120cc954321b9704a3f4e2",
+                "sha256Hash": "5a4da2ab3d5b47c9f9ce864e727b2cb346af1e3ea8b897fe8f704a97ff017619",
             }
         },
     }
@@ -124,7 +128,7 @@ class GQLOperations:
         "extensions": {
             "persistedQuery": {
                 "version": 1,
-                "sha256Hash": "14b5e8a50777165cfc3971e1d93b4758613fe1c817d5542c398dce70b7a45c05",
+                "sha256Hash": "f6396f5ffdde867a8f6f6da18286e4baf02e5b98d14689a69b5af320a4c7b7b8",
             }
         },
     }
@@ -133,16 +137,17 @@ class GQLOperations:
         "extensions": {
             "persistedQuery": {
                 "version": 1,
-                "sha256Hash": "b19ee96a0e79e3f8281c4108bc4c7b3f232266db6f96fd04a339ab393673a075",
+                "sha256Hash": "9a62a09bce5b53e26e64a671e530bc599cb6aab1e5ba3cbd5d85966d3940716f",
             }
         },
     }
-    ReportMenuItem = {  # Use for replace https://api.twitch.tv/helix/users?login={self.username}
-        "operationName": "ReportMenuItem",
+    GetIDFromLogin = {
+        "operationName": "GetIDFromLogin",
+        "variables": {"login": None},
         "extensions": {
             "persistedQuery": {
                 "version": 1,
-                "sha256Hash": "8f3628981255345ca5e5453dfd844efffb01d6413a9931498836e6268692a30c",
+                "sha256Hash": "94e82a7b1e3c21e186daa73ee2afc4b8f23bade1fbbff6fe8ac133f50a2f58ca",
             }
         },
     }

@@ -1,61 +1,101 @@
 import unittest
-from unittest.mock import Mock
-
-import requests
+from unittest.mock import Mock, patch
 
 from TwitchChannelPointsMiner.classes.TwitchLogin import TwitchLogin
+from TwitchChannelPointsMiner.constants import CLIENT_ID, USER_AGENTS
 
 
-def make_login(response):
+def make_login():
     login = object.__new__(TwitchLogin)
+    login.client_id = CLIENT_ID
+    login.device_id = "test-device-id"
+    login.token = None
+    login.login_check_result = False
     login.session = Mock()
-    login.session.post.return_value = response
+    login.username = "test-user"
+    login.user_id = None
+    login.email = None
+    login.cookies = []
     return login
 
 
-class TwitchLoginRequestTests(unittest.TestCase):
-    def test_login_request_returns_json_and_uses_timeout(self):
+class TwitchLoginTests(unittest.TestCase):
+    def test_device_request_uses_twitch_device_flow_endpoint_and_headers(self):
+        login = make_login()
         response = Mock()
-        response.json.return_value = {"access_token": "test-access-token"}
-        login = make_login(response)
+        login.session.post.return_value = response
 
-        result = login.send_login_request({"username": "test-user"})
-
-        self.assertEqual(result, {"access_token": "test-access-token"})
-        login.session.post.assert_called_once_with(
-            "https://passport.twitch.tv/login",
-            json={"username": "test-user"},
-            timeout=30,
+        result = login.send_oauth_request(
+            "https://id.twitch.tv/oauth2/device", {"client_id": CLIENT_ID}
         )
-        response.raise_for_status.assert_called_once_with()
 
-    def test_non_json_login_response_reports_metadata_without_body(self):
-        response = Mock()
-        response.status_code = 200
-        response.headers = {"Content-Type": "text/html"}
-        response.json.side_effect = requests.exceptions.JSONDecodeError(
-            "invalid json", "<html>private response</html>", 0
+        self.assertIs(result, response)
+        login.session.post.assert_called_once()
+        args, kwargs = login.session.post.call_args
+        self.assertEqual(args, ("https://id.twitch.tv/oauth2/device",))
+        self.assertEqual(kwargs["data"], {"client_id": CLIENT_ID})
+        self.assertEqual(kwargs["timeout"], 30)
+        self.assertEqual(
+            kwargs["headers"]["User-Agent"], USER_AGENTS["Android"]["TV"]
         )
-        login = make_login(response)
+        self.assertEqual(kwargs["headers"]["X-Device-Id"], "test-device-id")
 
-        with self.assertRaisesRegex(
-            RuntimeError,
-            r"non-JSON response \(HTTP 200, Content-Type: text/html\)",
-        ) as raised:
-            login.send_login_request({"username": "test-user"})
-
-        self.assertNotIn("private response", str(raised.exception))
-
-    def test_http_error_reports_status(self):
-        response = Mock()
-        response.status_code = 403
-        response.raise_for_status.side_effect = requests.exceptions.HTTPError(
-            response=response
+    @patch("TwitchChannelPointsMiner.classes.TwitchLogin.time.sleep")
+    def test_device_login_polls_until_approved(self, sleep):
+        login = make_login()
+        device_response = Mock(status_code=200)
+        device_response.json.return_value = {
+            "device_code": "private-device-code",
+            "user_code": "ABCD-EFGH",
+            "verification_uri": "https://www.twitch.tv/activate",
+            "interval": 5,
+            "expires_in": 600,
+        }
+        pending_response = Mock(status_code=400)
+        pending_response.json.return_value = {"error": "authorization_pending"}
+        token_response = Mock(status_code=200)
+        token_response.json.return_value = {"access_token": "test-access-token"}
+        login.send_oauth_request = Mock(
+            side_effect=[device_response, pending_response, token_response]
         )
-        login = make_login(response)
+        login.check_login = Mock(return_value=True)
 
-        with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
-            login.send_login_request({"username": "test-user"})
+        with self.assertLogs(
+            "TwitchChannelPointsMiner.classes.TwitchLogin", level="INFO"
+        ) as captured_logs, patch(
+            "TwitchChannelPointsMiner.classes.TwitchLogin.time.monotonic",
+            side_effect=[0, 0, 0, 1, 1, 2],
+        ):
+            result = login.login_flow()
+
+        self.assertTrue(result)
+        self.assertEqual(login.token, "test-access-token")
+        login.check_login.assert_called_once_with()
+        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual(login.send_oauth_request.call_count, 3)
+        self.assertNotIn("private-device-code", "\n".join(captured_logs.output))
+
+    def test_device_login_reports_denial_without_exposing_codes(self):
+        login = make_login()
+        device_response = Mock(status_code=200)
+        device_response.json.return_value = {
+            "device_code": "private-device-code",
+            "user_code": "ABCD-EFGH",
+            "interval": 1,
+            "expires_in": 60,
+        }
+        denied_response = Mock(status_code=400)
+        denied_response.json.return_value = {"error": "access_denied"}
+        login.send_oauth_request = Mock(
+            side_effect=[device_response, denied_response]
+        )
+
+        with patch(
+            "TwitchChannelPointsMiner.classes.TwitchLogin.time.monotonic",
+            return_value=0,
+        ), patch("TwitchChannelPointsMiner.classes.TwitchLogin.time.sleep"):
+            with self.assertRaisesRegex(RuntimeError, "authorization was denied"):
+                login.login_flow()
 
 
 if __name__ == "__main__":

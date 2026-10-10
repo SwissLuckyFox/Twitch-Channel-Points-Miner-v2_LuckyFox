@@ -34,7 +34,12 @@ from TwitchChannelPointsMiner.classes.Settings import (
     Settings,
 )
 from TwitchChannelPointsMiner.classes.TwitchLogin import TwitchLogin
-from TwitchChannelPointsMiner.constants import CLIENT_ID, CLIENT_VERSION, GQLOperations
+from TwitchChannelPointsMiner.constants import (
+    CLIENT_ID,
+    CLIENT_VERSION,
+    GQLOperations,
+    URL,
+)
 from TwitchChannelPointsMiner.utils import (
     _millify,
     create_chunks,
@@ -76,6 +81,9 @@ class Twitch(object):
         "running",
         "device_id",
         "client_session",
+        "client_version",
+        "client_version_loaded",
+        "twilight_build_id_pattern",
     ]
 
     def __init__(self, username, user_agent, password=None):
@@ -85,9 +93,17 @@ class Twitch(object):
         self.user_agent = user_agent
         self.device_id = token_hex(16)
         self.client_session = token_hex(16)
+        self.client_version = CLIENT_VERSION
+        self.client_version_loaded = False
+        self.twilight_build_id_pattern = re.compile(
+            r'window\.__twilightBuildID\s*=\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-'
+            r'[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"'
+        )
         self.twitch_login = TwitchLogin(
             CLIENT_ID, username, self.user_agent, password=password
         )
+        self.twitch_login.device_id = self.device_id
+        self.twitch_login.session.headers["X-Device-Id"] = self.device_id
         self.running = True
 
     def login(self):
@@ -187,17 +203,26 @@ class Twitch(object):
                 streamer.set_offline()
 
     def get_channel_id(self, streamer_username):
-        json_data = copy.deepcopy(GQLOperations.ReportMenuItem)
-        json_data["variables"] = {"channelLogin": streamer_username}
+        json_data = copy.deepcopy(GQLOperations.GetIDFromLogin)
+        json_data["variables"]["login"] = streamer_username
         json_response = self.post_gql_request(json_data)
-        if (
-            "data" not in json_response
-            or "user" not in json_response["data"]
-            or json_response["data"]["user"] is None
+        if not isinstance(json_response, dict) or not isinstance(
+            json_response.get("data"), dict
         ):
+            raise UnexpectedTwitchResponseException(
+                f"Twitch returned no GraphQL data while looking up "
+                f"{streamer_username}.{_graphql_error_details(json_response)}"
+            )
+
+        user = json_response["data"].get("user")
+        if user is None:
             raise StreamerDoesNotExistException
-        else:
-            return json_response["data"]["user"]["id"]
+        if not isinstance(user, dict) or not user.get("id"):
+            raise UnexpectedTwitchResponseException(
+                f"Twitch returned incomplete user data while looking up "
+                f"{streamer_username}.{_graphql_error_details(json_response)}"
+            )
+        return user["id"]
 
     def get_channel_logins(self, channel_ids):
         channel_logins = {}
@@ -326,7 +351,7 @@ class Twitch(object):
                     "Authorization": f"OAuth {self.twitch_login.get_auth_token()}",
                     "Client-Id": CLIENT_ID,
                     "Client-Session-Id": self.client_session,
-                    "Client-Version": CLIENT_VERSION,
+                    "Client-Version": self.update_client_version(),
                     "User-Agent": self.user_agent,
                     "X-Device-Id": self.device_id,
                 },
@@ -346,6 +371,26 @@ class Twitch(object):
                 operation_name = json_data.get("operationName", "unknown")
             logger.error(f"Error with GQLOperations ({operation_name}): {e}")
             return {}
+
+    def update_client_version(self):
+        if self.client_version_loaded:
+            return self.client_version
+
+        self.client_version_loaded = True
+        try:
+            response = requests.get(URL, timeout=15)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as error:
+            logger.debug("Could not fetch Twitch client version: %s", error)
+            return self.client_version
+
+        match = self.twilight_build_id_pattern.search(response.text)
+        if match is None:
+            logger.debug("Twitch page did not contain a client build ID")
+            return self.client_version
+
+        self.client_version = match.group(1)
+        return self.client_version
 
     def send_minute_watched_events(self, streamers, priority, chunk_size=3):
         while self.running:

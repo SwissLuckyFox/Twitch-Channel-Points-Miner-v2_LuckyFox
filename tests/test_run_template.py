@@ -29,6 +29,7 @@ class RunTemplateTests(unittest.TestCase):
         )
         self.assertLessEqual(set(kwargs), supported_parameters)
         self.assertEqual(kwargs["username"], "ci-validation-user")
+        self.assertNotIn("password", kwargs)
 
     def test_optional_notifications_are_disabled_when_empty(self):
         with patch.dict(

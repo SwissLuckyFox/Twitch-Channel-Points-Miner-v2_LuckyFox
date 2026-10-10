@@ -3,19 +3,19 @@
 # The MIT License (MIT)
 
 import copy
-import getpass
 import logging
 import os
 import pickle
+import time
+from secrets import token_hex
 
 import browser_cookie3
 import requests
 
 from TwitchChannelPointsMiner.classes.Exceptions import (
-    BadCredentialsException,
     WrongCookiesException,
 )
-from TwitchChannelPointsMiner.constants import GQLOperations
+from TwitchChannelPointsMiner.constants import GQLOperations, USER_AGENTS
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +23,11 @@ logger = logging.getLogger(__name__)
 class TwitchLogin(object):
     __slots__ = [
         "client_id",
+        "device_id",
         "token",
         "login_check_result",
         "session",
-        "session",
         "username",
-        "password",
         "user_id",
         "email",
         "cookies",
@@ -36,149 +35,151 @@ class TwitchLogin(object):
 
     def __init__(self, client_id, username, user_agent, password=None):
         self.client_id = client_id
+        self.device_id = token_hex(16)
         self.token = None
         self.login_check_result = False
         self.session = requests.session()
         self.session.headers.update(
-            {"Client-ID": self.client_id, "User-Agent": user_agent}
+            {
+                "Client-ID": self.client_id,
+                "X-Device-Id": self.device_id,
+                "User-Agent": user_agent,
+            }
         )
         self.username = username
-        self.password = password
         self.user_id = None
         self.email = None
 
         self.cookies = []
 
     def login_flow(self):
-        logger.info("You'll have to login to Twitch!")
-
-        post_data = {
-            "client_id": self.client_id,
-            "undelete_user": False,
-            "remember_me": True,
-        }
-
-        use_backup_flow = False
-
-        for attempt in range(0, 25):
-            password = (
-                getpass.getpass(f"Enter Twitch password for {self.username}: ")
-                if self.password in [None, ""]
-                else self.password
+        logger.info("Starting Twitch device authorization.")
+        device_response = self.send_oauth_request(
+            "https://id.twitch.tv/oauth2/device",
+            {
+                "client_id": self.client_id,
+                "scopes": (
+                    "channel_read chat:read user_blocks_edit "
+                    "user_blocks_read user_follows_edit user_read"
+                ),
+            },
+        )
+        if device_response.status_code != 200:
+            raise RuntimeError(
+                "Twitch device authorization request failed with HTTP "
+                f"{device_response.status_code}."
             )
 
-            post_data["username"] = self.username
-            post_data["password"] = password
+        try:
+            device_data = device_response.json()
+            device_code = device_data["device_code"]
+            user_code = device_data["user_code"]
+            interval = int(device_data["interval"])
+            expires_in = int(device_data["expires_in"])
+            verification_uri = device_data.get(
+                "verification_uri", "https://www.twitch.tv/activate"
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError(
+                "Twitch returned an invalid device authorization response."
+            ) from error
 
-            while True:
-                # Try login without 2FA
-                login_response = self.send_login_request(post_data)
+        if interval <= 0 or expires_in <= 0:
+            raise RuntimeError(
+                "Twitch returned invalid device authorization timing values."
+            )
 
-                if "captcha_proof" in login_response:
-                    post_data["captcha"] = dict(proof=login_response["captcha_proof"])
+        logger.info("Open %s and enter this code: %s", verification_uri, user_code)
+        logger.info("The code expires in %d minutes.", max(1, expires_in // 60))
 
-                if "error_code" in login_response:
-                    err_code = login_response["error_code"]
-                    if err_code in [3011, 3012]:  # missing 2fa token
-                        if err_code == 3011:
-                            logger.info(
-                                "Two factor authentication enabled, please enter token below."
-                            )
-                        else:
-                            logger.info("Invalid two factor token, please try again.")
-
-                        twofa = input("2FA token: ")
-                        post_data["authy_token"] = twofa.strip()
-                        continue
-
-                    elif err_code in [3022, 3023]:  # missing 2fa token
-                        if err_code == 3022:
-                            logger.info("Login Verification code required.")
-                            self.email = login_response["obscured_email"]
-                        else:
-                            logger.info(
-                                "Invalid Login Verification code entered, please try again."
-                            )
-
-                        twofa = input(
-                            f"Please enter the 6-digit code sent to {self.email}: "
-                        )
-                        post_data["twitchguard_code"] = twofa.strip()
-                        continue
-
-                    # invalid password, or password not provided
-                    elif err_code in [3001, 3003]:
-                        logger.info("Invalid username or password, please try again.")
-
-                        # If the password is loaded from run.py, require the user to fix it there.
-                        if self.password not in [None, ""]:
-                            raise BadCredentialsException(
-                                "Username or password is incorrect."
-                            )
-
-                        # If the user didn't load the password from run.py we can just ask for it again.
-                        break
-                    elif err_code == 1000:
-                        logger.info(
-                            "Console login unavailable (CAPTCHA solving required)."
-                        )
-                        use_backup_flow = True
-                        break
-                    else:
-                        logger.error(f"Unknown error: {login_response}")
-                        raise NotImplementedError(
-                            f"Unknown TwitchAPI error code: {err_code}"
-                        )
-
-                if "access_token" in login_response:
-                    self.set_token(login_response["access_token"])
-                    return self.check_login()
-
-            if use_backup_flow:
+        deadline = time.monotonic() + expires_in
+        token_request = {
+            "client_id": self.client_id,
+            "device_code": device_code,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        }
+        while time.monotonic() < deadline:
+            time.sleep(interval)
+            if time.monotonic() >= deadline:
                 break
 
-        if use_backup_flow:
-            self.set_token(self.login_flow_backup())
-            return self.check_login()
+            token_response = self.send_oauth_request(
+                "https://id.twitch.tv/oauth2/token", token_request
+            )
+            try:
+                token_data = token_response.json()
+            except ValueError as error:
+                raise RuntimeError(
+                    "Twitch returned a non-JSON device authorization response."
+                ) from error
 
-        return False
+            if token_response.status_code == 200:
+                access_token = token_data.get("access_token")
+                if not isinstance(access_token, str) or not access_token:
+                    raise RuntimeError(
+                        "Twitch device authorization response did not contain an "
+                        "access token."
+                    )
+                self.set_token(access_token)
+                if self.check_login():
+                    return True
+                raise RuntimeError(
+                    "Twitch issued an access token, but the miner could not "
+                    "validate the account."
+                )
+
+            oauth_error = token_data.get("error")
+            if oauth_error == "authorization_pending":
+                continue
+            if oauth_error == "slow_down":
+                interval += 5
+                continue
+            if oauth_error == "access_denied":
+                raise RuntimeError("Twitch device authorization was denied.")
+            if oauth_error == "expired_token":
+                break
+            raise RuntimeError(
+                "Twitch device authorization polling failed with HTTP "
+                f"{token_response.status_code} (OAuth error: "
+                f"{oauth_error or 'unknown'})."
+            )
+
+        raise RuntimeError(
+            "Twitch device authorization expired before it was approved. "
+            "Restart the container and complete a new authorization."
+        )
 
     def set_token(self, new_token):
         self.token = new_token
         self.session.headers.update({"Authorization": f"Bearer {self.token}"})
 
-    def send_login_request(self, json_data):
+    def send_oauth_request(self, url, form_data):
         try:
             response = self.session.post(
-                "https://passport.twitch.tv/login",
-                json=json_data,
+                url,
+                data=form_data,
+                headers={
+                    "Accept": "application/json",
+                    "Accept-Encoding": "gzip",
+                    "Accept-Language": "en-US",
+                    "Cache-Control": "no-cache",
+                    "Client-Id": self.client_id,
+                    "Host": "id.twitch.tv",
+                    "Origin": "https://android.tv.twitch.tv",
+                    "Pragma": "no-cache",
+                    "Referer": "https://android.tv.twitch.tv/",
+                    "User-Agent": USER_AGENTS["Android"]["TV"],
+                    "X-Device-Id": self.device_id,
+                },
                 timeout=30,
             )
-            response.raise_for_status()
-        except requests.exceptions.HTTPError as error:
-            status_code = (
-                error.response.status_code if error.response is not None else "unknown"
-            )
-            raise RuntimeError(
-                f"Twitch login endpoint returned HTTP {status_code}. "
-                "Check Twitch availability and the container's network/proxy settings."
-            ) from error
         except requests.exceptions.RequestException as error:
             raise RuntimeError(
-                "Could not reach the Twitch login endpoint. Check the container's "
-                "network/DNS/TLS connection and try again."
+                "Could not reach Twitch's device authorization endpoint. Check the "
+                "container's network/DNS/TLS connection and try again."
             ) from error
 
-        try:
-            return response.json()
-        except ValueError as error:
-            content_type = response.headers.get("Content-Type", "unknown")
-            raise RuntimeError(
-                "Twitch login endpoint returned a non-JSON response "
-                f"(HTTP {response.status_code}, Content-Type: {content_type}). "
-                "This may be a temporary Twitch response, network/proxy filtering, "
-                "or a changed login endpoint. The response body was not logged."
-            ) from error
+        return response
 
     def login_flow_backup(self):
         """Backup OAuth login flow in case manual captcha solving is required"""
@@ -246,9 +247,11 @@ class TwitchLogin(object):
         return user_id
 
     def __set_user_id(self):
-        json_data = copy.deepcopy(GQLOperations.ReportMenuItem)
-        json_data["variables"] = {"channelLogin": self.username}
-        response = self.session.post(GQLOperations.url, json=json_data)
+        json_data = copy.deepcopy(GQLOperations.GetIDFromLogin)
+        json_data["variables"]["login"] = self.username
+        response = self.session.post(
+            GQLOperations.url, json=json_data, timeout=30
+        )
 
         if response.status_code == 200:
             json_response = response.json()

@@ -1,3 +1,4 @@
+import re
 import unittest
 from unittest.mock import Mock, patch
 
@@ -6,7 +7,12 @@ from TwitchChannelPointsMiner.classes.Exceptions import (
     UnexpectedTwitchResponseException,
 )
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
-from TwitchChannelPointsMiner.constants import CLIENT_ID, CLIENT_VERSION, GQLOperations
+from TwitchChannelPointsMiner.constants import (
+    CLIENT_ID,
+    CLIENT_VERSION,
+    GQLOperations,
+    URL,
+)
 
 
 class ChannelPointsContextTests(unittest.TestCase):
@@ -61,17 +67,49 @@ class ChannelPointsContextTests(unittest.TestCase):
             self.twitch.load_channel_points_context(self.streamer)
 
     def test_current_persisted_query_hashes_are_configured(self):
+        current_hashes = {
+            "VideoPlayerStreamInfoOverlayChannel": (
+                "198492e0857f6aedead9665c81c5a06d67b25b58034649687124083ff288597d"
+            ),
+            "DropsPage_ClaimDropRewards": (
+                "a455deea71bdc9015b78eb49f4acfbce8baa7ccbedd28e549bb025bd0f751930"
+            ),
+            "ChannelPointsContext": (
+                "7fe050e3761eb2cf258d70ee1a21cbd76fa8cf3d7e7b12fc437e7029d446b5e3"
+            ),
+            "Inventory": (
+                "d86775d0ef16a63a33ad52e80eaff963b2d5b72fada7c991504a57496e1d8e4b"
+            ),
+            "ViewerDropsDashboard": (
+                "5a4da2ab3d5b47c9f9ce864e727b2cb346af1e3ea8b897fe8f704a97ff017619"
+            ),
+            "DropCampaignDetails": (
+                "f6396f5ffdde867a8f6f6da18286e4baf02e5b98d14689a69b5af320a4c7b7b8"
+            ),
+            "DropsHighlightService_AvailableDrops": (
+                "9a62a09bce5b53e26e64a671e530bc599cb6aab1e5ba3cbd5d85966d3940716f"
+            ),
+            "GetIDFromLogin": (
+                "94e82a7b1e3c21e186daa73ee2afc4b8f23bade1fbbff6fe8ac133f50a2f58ca"
+            ),
+            "ChannelFollows": (
+                "eecf815273d3d949e5cf0085cc5084cd8a1b5b7b6f7990cf43cb0beadf546907"
+            ),
+        }
+        for operation_name, expected_hash in current_hashes.items():
+            with self.subTest(operation=operation_name):
+                operation = getattr(GQLOperations, operation_name)
+                self.assertEqual(
+                    operation["extensions"]["persistedQuery"]["sha256Hash"],
+                    expected_hash,
+                )
+
         self.assertEqual(
-            GQLOperations.ChannelPointsContext["extensions"]["persistedQuery"][
-                "sha256Hash"
-            ],
-            "7fe050e3761eb2cf258d70ee1a21cbd76fa8cf3d7e7b12fc437e7029d446b5e3",
+            GQLOperations.Inventory["variables"], {"fetchRewardCampaigns": True}
         )
         self.assertEqual(
-            GQLOperations.ChannelFollows["extensions"]["persistedQuery"][
-                "sha256Hash"
-            ],
-            "eecf815273d3d949e5cf0085cc5084cd8a1b5b7b6f7990cf43cb0beadf546907",
+            GQLOperations.ViewerDropsDashboard["variables"],
+            {"fetchRewardCampaigns": True},
         )
 
     def test_follower_graphql_errors_are_not_reported_as_zero_followers(self):
@@ -109,25 +147,61 @@ class ChannelPointsContextTests(unittest.TestCase):
 
         self.assertEqual(self.twitch.get_followers(), ["somefollower"])
 
+    def test_channel_lookup_does_not_mistake_graphql_errors_for_missing_channel(self):
+        self.twitch.post_gql_request.return_value = {
+            "errors": [
+                {
+                    "message": "IntegrityCheckFailed",
+                    "extensions": {"code": "INTEGRITY_CHECK_FAILED"},
+                }
+            ]
+        }
+
+        with self.assertRaisesRegex(
+            UnexpectedTwitchResponseException,
+            "INTEGRITY_CHECK_FAILED: IntegrityCheckFailed",
+        ):
+            self.twitch.get_channel_id("existing_channel")
+
+    def test_channel_lookup_reports_nonexistent_channel_from_valid_data(self):
+        self.twitch.post_gql_request.return_value = {"data": {"user": None}}
+
+        with self.assertRaises(StreamerDoesNotExistException):
+            self.twitch.get_channel_id("missing_channel")
+
     @patch("TwitchChannelPointsMiner.classes.Twitch.requests.post")
     def test_graphql_request_includes_client_integrity_context_headers(self, post):
         post.return_value.json.return_value = {"data": {}}
         self.twitch.user_agent = "test-user-agent"
         self.twitch.device_id = "device-id"
         self.twitch.client_session = "session-id"
+        self.twitch.client_version = CLIENT_VERSION
+        self.twitch.client_version_loaded = False
+        self.twitch.twilight_build_id_pattern = re.compile(
+            r'window\.__twilightBuildID\s*=\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-'
+            r'[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"'
+        )
         self.twitch.twitch_login = Mock()
         self.twitch.twitch_login.get_auth_token.return_value = "test-token"
 
         self.post_gql_patcher.stop()
-        Twitch.post_gql_request(self.twitch, {"operationName": "test"})
+        with patch(
+            "TwitchChannelPointsMiner.classes.Twitch.requests.get"
+        ) as get_client_page:
+            get_client_page.return_value = Mock(
+                status_code=200,
+                text='window.__twilightBuildID = "12345678-1234-1234-1234-123456789abc";',
+            )
+            Twitch.post_gql_request(self.twitch, {"operationName": "test"})
 
+        get_client_page.assert_called_once_with(URL, timeout=15)
         self.assertEqual(
             post.call_args.kwargs["headers"],
             {
                 "Authorization": "OAuth test-token",
                 "Client-Id": CLIENT_ID,
                 "Client-Session-Id": "session-id",
-                "Client-Version": CLIENT_VERSION,
+                "Client-Version": "12345678-1234-1234-1234-123456789abc",
                 "User-Agent": "test-user-agent",
                 "X-Device-Id": "device-id",
             },
