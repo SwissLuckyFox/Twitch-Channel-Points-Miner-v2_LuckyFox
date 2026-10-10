@@ -1,16 +1,24 @@
-name: deploy-docker
+name: Publish Docker image to GHCR
 
 on:
   push:
     branches: [master]
+<<<<<<< HEAD
+=======
+    tags: ["v*"]
+>>>>>>> 010f449 (Test)
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
-  deploy-docker:
-    name: Deploy Docker Hub
-    if: github.repository == 'rdavydov/Twitch-Channel-Points-Miner-v2'
+  publish:
+    name: Build and publish image
     runs-on: ubuntu-latest
     steps:
+<<<<<<< HEAD
       - name: Checkout source
         uses: actions/checkout@v3
 
@@ -22,10 +30,25 @@ jobs:
 
       - name: Login to DockerHub
         uses: docker/login-action@v2.0.0
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_TOKEN }}
+=======
+      - name: Check out source
+        uses: actions/checkout@v4
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+>>>>>>> 010f449 (Test)
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+<<<<<<< HEAD
       - name: Build and push
         id: docker_build
         uses: docker/build-push-action@v3.1.1
@@ -47,3 +70,31 @@ jobs:
 
       - name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
+=======
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/swissluckyfox/twitch-channel-points-miner-v2
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push AMD64, ARM64, and ARMv7 images
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          build-args: BUILDX_QEMU_ENV=true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report image digest
+        run: echo "${{ steps.build.outputs.digest }}"
+>>>>>>> 010f449 (Test)

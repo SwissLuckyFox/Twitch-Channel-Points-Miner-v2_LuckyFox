@@ -246,19 +246,15 @@ class TwitchChannelPointsMiner:
                 self.streamers, "make_predictions", True
             )
 
-            # If we have at least one streamer with settings = claim_drops True
-            # Spawn a thread for sync inventory and dashboard
-            if (
-                at_least_one_value_in_settings_is(self.streamers, "claim_drops", True)
-                is True
-            ):
-                self.sync_campaigns_thread = threading.Thread(
-                    target=self.twitch.sync_campaigns,
-                    args=(self.streamers,),
-                )
-                self.sync_campaigns_thread.name = "Sync campaigns/inventory"
-                self.sync_campaigns_thread.start()
-                time.sleep(30)
+            # Sync campaigns even when no streamers were configured so that
+            # participating channels can be discovered from active drops.
+            self.sync_campaigns_thread = threading.Thread(
+                target=self.twitch.sync_campaigns,
+                args=(self.streamers,),
+            )
+            self.sync_campaigns_thread.name = "Sync campaigns/inventory"
+            self.sync_campaigns_thread.start()
+            time.sleep(30)
 
             self.minute_watcher_thread = threading.Thread(
                 target=self.twitch.send_minute_watched_events,

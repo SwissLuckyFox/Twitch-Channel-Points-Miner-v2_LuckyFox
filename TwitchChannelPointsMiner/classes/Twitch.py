@@ -17,6 +17,11 @@ import requests
 
 from TwitchChannelPointsMiner.classes.entities.Campaign import Campaign
 from TwitchChannelPointsMiner.classes.entities.Drop import Drop
+from TwitchChannelPointsMiner.classes.entities.Streamer import (
+    Streamer,
+    StreamerSettings,
+)
+from TwitchChannelPointsMiner.classes.Chat import ChatPresence
 from TwitchChannelPointsMiner.classes.Exceptions import (
     StreamerDoesNotExistException,
     StreamerIsOfflineException,
@@ -160,6 +165,37 @@ class Twitch(object):
         else:
             return json_response["data"]["user"]["id"]
 
+    def get_channel_logins(self, channel_ids):
+        channel_logins = {}
+        for chunk in create_chunks(channel_ids, 20):
+            requests_data = [
+                {
+                    "operationName": "UserLoginByID",
+                    "query": "query UserLoginByID($id: ID!) { user(id: $id) { id login } }",
+                    "variables": {"id": channel_id},
+                }
+                for channel_id in chunk
+            ]
+            responses = self.post_gql_request(requests_data)
+            if not isinstance(responses, list):
+                logger.error("Unexpected response while resolving drop channel IDs")
+                continue
+
+            for response in responses:
+                if not isinstance(response, dict):
+                    logger.warning("Invalid user response while resolving a drop channel ID")
+                    continue
+                user = response.get("data", {}).get("user")
+                if (
+                    isinstance(user, dict)
+                    and user.get("id")
+                    and user.get("login")
+                ):
+                    channel_logins[user["id"]] = user["login"].lower()
+                else:
+                    logger.debug("Twitch did not return a login for a drop channel ID")
+        return channel_logins
+
     def get_followers(
         self, limit: int = 100, order: FollowersOrder = FollowersOrder.ASC
     ):
@@ -239,9 +275,15 @@ class Twitch(object):
             )
             return response.json()
         except requests.exceptions.RequestException as e:
-            logger.error(
-                f"Error with GQLOperations ({json_data['operationName']}): {e}"
-            )
+            if isinstance(json_data, list):
+                operation_name = (
+                    json_data[0].get("operationName", "batch")
+                    if json_data
+                    else "batch"
+                )
+            else:
+                operation_name = json_data.get("operationName", "unknown")
+            logger.error(f"Error with GQLOperations ({operation_name}): {e}")
             return {}
 
     def send_minute_watched_events(self, streamers, priority, chunk_size=3):
@@ -267,7 +309,18 @@ class Twitch(object):
                 for prior in priority:
                     if prior == Priority.ORDER and len(streamers_watching) < 2:
                         # Get the first 2 items, they are already in order
+<<<<<<< HEAD
                         streamers_watching += streamers_index[:2]
+=======
+                        candidates = [
+                            index
+                            for index in streamers_index
+                            if index not in streamers_watching
+                        ]
+                        streamers_watching.update(
+                            candidates[:remaining_watch_amount()]
+                        )
+>>>>>>> 010f449 (Test)
 
                     elif (
                         prior in [Priority.POINTS_ASCENDING, Priority.POINTS_DESCEDING]
@@ -276,6 +329,7 @@ class Twitch(object):
                         items = [
                             {"points": streamers[index].channel_points, "index": index}
                             for index in streamers_index
+                            if index not in streamers_watching
                         ]
                         items = sorted(
                             items,
@@ -288,14 +342,15 @@ class Twitch(object):
 
                     elif prior == Priority.STREAK and len(streamers_watching) < 2:
                         """
-                        Check if we need need to change priority based on watch streak
+                        Give eligible streaks priority until the reward is confirmed
+                        or seven watched minutes have been recorded.
                         Viewers receive points for returning for x consecutive streams.
                         Each stream must be at least 10 minutes long and it must have been at least 30 minutes since the last stream ended.
-                        Watch at least 6m for get the +10
                         """
                         for index in streamers_index:
                             if (
-                                streamers[index].settings.watch_streak is True
+                                index not in streamers_watching
+                                and streamers[index].settings.watch_streak is True
                                 and streamers[index].stream.watch_streak_missing is True
                                 and (
                                     streamers[index].offline_at == 0
@@ -313,16 +368,27 @@ class Twitch(object):
 
                     elif prior == Priority.DROPS and len(streamers_watching) < 2:
                         for index in streamers_index:
+<<<<<<< HEAD
                             if streamers[index].drops_condition() is True:
                                 streamers_watching.append(index)
                                 if len(streamers_watching) == 2:
+=======
+                            if (
+                                index not in streamers_watching
+                                and streamers[index].drops_condition() is True
+                                and streamers[index].stream.campaigns
+                            ):
+                                streamers_watching.add(index)
+                                if remaining_watch_amount() <= 0:
+>>>>>>> 010f449 (Test)
                                     break
 
                     elif prior == Priority.SUBSCRIBED and len(streamers_watching) < 2:
                         streamers_with_multiplier = [
                             index
                             for index in streamers_index
-                            if streamers[index].viewer_has_points_multiplier()
+                            if index not in streamers_watching
+                            and streamers[index].viewer_has_points_multiplier()
                         ]
                         streamers_with_multiplier = sorted(
                             streamers_with_multiplier,
@@ -398,11 +464,20 @@ class Twitch(object):
                         logger.error(f"Error while trying to send minute watched: {e}")
                         self.__check_connection_handler(chunk_size)
                     except requests.exceptions.Timeout as e:
+<<<<<<< HEAD
                         logger.error(f"Error while trying to send minute watched: {e}")
 
                     self.__chuncked_sleep(
                         next_iteration - time.time(), chunk_size=chunk_size
                     )
+=======
+                        logger.error(
+                            f"Error while trying to send minute watched: {e}")
+                    finally:
+                        self.__chuncked_sleep(
+                            next_iteration - time.time(), chunk_size=chunk_size
+                        )
+>>>>>>> 010f449 (Test)
 
                 if streamers_watching == []:
                     self.__chuncked_sleep(60, chunk_size=chunk_size)
@@ -634,6 +709,11 @@ class Twitch(object):
 
     def sync_campaigns(self, streamers, chunk_size=3):
         campaigns_update = 0
+<<<<<<< HEAD
+=======
+        campaigns = []
+        discovered_streamers = {}
+>>>>>>> 010f449 (Test)
         while self.running:
             try:
                 # Get update from dashboard each 60minutes
@@ -661,20 +741,78 @@ class Twitch(object):
                 # Divide et impera :)
                 campaigns = self.__sync_campaigns(campaigns)
 
-                # Check if user It's currently streaming the same game present in campaigns_details
-                for i in range(0, len(streamers)):
-                    if streamers[i].drops_condition() is True:
-                        # yes! The streamer[i] have the drops_tags enabled and we It's currently stream a game with campaign active!
-                        # With 'campaigns_ids' we are also sure that this streamer have the campaign active.
-                        # yes! The streamer[index] have the drops_tags enabled and we It's currently stream a game with campaign active!
-                        streamers[i].stream.campaigns = list(
-                            filter(
-                                lambda x: x.drops != []
-                                and x.game == streamers[i].stream.game
-                                and x.id in streamers[i].stream.campaigns_ids,
-                                campaigns,
+                campaign_channels = {
+                    channel_id
+                    for campaign in campaigns
+                    if campaign.drops
+                    for channel_id in campaign.channels
+                }
+                known_channel_ids = {
+                    streamer.channel_id for streamer in streamers
+                }
+                channel_logins = self.get_channel_logins(
+                    [
+                        channel_id
+                        for channel_id in campaign_channels
+                        if channel_id not in known_channel_ids
+                        and channel_id not in discovered_streamers
+                    ]
+                )
+
+                for channel_id, login in channel_logins.items():
+                    streamer = Streamer(login)
+                    streamer.channel_id = channel_id
+                    streamer.settings = StreamerSettings(
+                        make_predictions=False,
+                        follow_raid=False,
+                        claim_drops=True,
+                        claim_moments=False,
+                        watch_streak=False,
+                        community_goals=False,
+                        chat=ChatPresence.NEVER,
+                    )
+                    streamer.settings.default()
+                    streamer.settings.bet.default()
+                    discovered_streamers[channel_id] = streamer
+                    streamers.append(streamer)
+                    logger.info(
+                        f"Discovered {login} for an unclaimed Twitch drop",
+                        extra={"emoji": ":gift:"},
+                    )
+
+                for channel_id in list(discovered_streamers):
+                    if channel_id not in campaign_channels:
+                        streamer = discovered_streamers[channel_id]
+                        streamer.stream.campaigns = []
+                        if streamer.is_online:
+                            streamer.set_offline()
+
+                for streamer in discovered_streamers.values():
+                    self.check_streamer_online(streamer)
+
+                # Match active campaigns to live channels, including newly discovered
+                # channels listed in a campaign's allow-list.
+                for streamer in streamers:
+                    if (
+                        streamer.settings.claim_drops is True
+                        and streamer.is_online is True
+                    ):
+                        game_id = streamer.stream.game_id()
+                        eligible_campaigns = [
+                            campaign
+                            for campaign in campaigns
+                            if campaign.drops
+                            and campaign.game is not None
+                            and campaign.game.get("id") == game_id
+                            and (
+                                campaign.id in streamer.stream.campaigns_ids
+                                or streamer.channel_id in campaign.channels
                             )
-                        )
+                        ]
+                        streamer.stream.campaigns = eligible_campaigns
+                        streamer.stream.campaigns_ids = [
+                            campaign.id for campaign in eligible_campaigns
+                        ]
 
             except (ValueError, KeyError, requests.exceptions.ConnectionError) as e:
                 logger.error(f"Error while syncing inventory: {e}")

@@ -389,14 +389,14 @@ If you don't have a cookie or It's your first time running the script, you will 
 
 To publish your own image instead of using the Docker Hub image:
 
-1. Fork this repository to your GitHub account. The `Publish Docker image to GHCR` workflow builds and publishes the image on pushes to your fork. It tags the default branch as `latest`, and also publishes branch, version, and commit tags.
+1. After pushing this workflow to the `master` branch of your fork, GitHub Actions builds and publishes the image on pushes to `master` and on version tags. It tags the default branch as `latest`, and also publishes branch, version, and commit tags.
 2. In the fork, open **Actions** and enable workflows if GitHub prompts you to do so. After the first successful run, open the package under your GitHub profile and change its visibility to **Public** so Unraid can pull it without credentials.
-3. In Unraid, add a container and use `ghcr.io/<your-github-user>/twitch-channel-points-miner-v2:latest` as the repository/image. Alternatively, use this image in a Compose/Portainer stack:
+3. In Unraid, add a container and use `ghcr.io/swissluckyfox/twitch-channel-points-miner-v2:latest` as the repository/image. Alternatively, use this image in a Compose/Portainer stack:
 
 ```yml
 services:
   miner:
-    image: ghcr.io/<your-github-user>/twitch-channel-points-miner-v2:latest
+    image: ghcr.io/swissluckyfox/twitch-channel-points-miner-v2:latest
     stdin_open: true
     tty: true
     environment:
@@ -412,7 +412,7 @@ services:
 
 Create your own `run.py` in the appdata directory before starting the container; the image expects it to be mounted there. Keep that file and the data directories in appdata so they survive image updates. Do not put Twitch credentials or other secrets in a public repository.
 
-To update, pull/recreate the container in Unraid after a new image is published. If you use a private GHCR package, configure registry credentials in Unraid instead of making the package public.
+When a new image is published, use Unraid's container update check to pull and recreate the container; the mounted `run.py` and appdata directories stay in place. If you use a private GHCR package, configure registry credentials in Unraid instead of making the package public.
 
 If you don't have a cookie or it's your first time running the script, you will need to login to Twitch and start the container with `-it` args. If you need to run multiple containers you can bind different ports (only if you need also the analytics) and mount dirrent run.py file, like
 

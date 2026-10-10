@@ -6,8 +6,17 @@ WORKDIR /usr/src/app
 
 COPY ./requirements.txt ./
 
+<<<<<<< HEAD
 RUN apt-get update
 RUN DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --fix-missing --no-install-recommends \
+=======
+ENV CRYPTOGRAPHY_DONT_BUILD_RUST=1
+
+RUN pip install --upgrade pip
+
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -qq -y --no-install-recommends \
+>>>>>>> 010f449 (Test)
     gcc \
     libffi-dev \
     rustc \
