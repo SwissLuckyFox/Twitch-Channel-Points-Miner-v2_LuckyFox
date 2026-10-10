@@ -470,9 +470,33 @@ class Twitch(object):
 
         response = self.post_gql_request(json_data)
         if not isinstance(response, dict) or not isinstance(response.get("data"), dict):
+            details = []
+            errors = response.get("errors", []) if isinstance(response, dict) else []
+            if isinstance(errors, list):
+                for error in errors[:3]:
+                    if not isinstance(error, dict):
+                        continue
+                    message = error.get("message")
+                    extensions = error.get("extensions")
+                    code = (
+                        extensions.get("code")
+                        if isinstance(extensions, dict)
+                        else None
+                    )
+                    parts = []
+                    if isinstance(code, str) and code:
+                        parts.append(code)
+                    if isinstance(message, str) and message:
+                        parts.append(" ".join(message.split())[:300])
+                    if parts:
+                        details.append(": ".join(parts))
+
+            error_details = (
+                f" GraphQL errors: {'; '.join(details)}" if details else ""
+            )
             raise UnexpectedTwitchResponseException(
                 f"Twitch returned no GraphQL data while loading channel points for "
-                f"{streamer.username}."
+                f"{streamer.username}.{error_details}"
             )
 
         community = response["data"].get("community")

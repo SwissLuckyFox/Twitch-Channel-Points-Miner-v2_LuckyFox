@@ -45,11 +45,17 @@ class ChannelPointsContextTests(unittest.TestCase):
 
     def test_missing_graphql_data_has_clear_exception(self):
         self.twitch.post_gql_request.return_value = {
-            "errors": [{"message": "upstream unavailable"}]
+            "errors": [
+                {
+                    "message": "upstream unavailable",
+                    "extensions": {"code": "SERVICE_UNAVAILABLE"},
+                }
+            ]
         }
 
         with self.assertRaisesRegex(
-            UnexpectedTwitchResponseException, "returned no GraphQL data"
+            UnexpectedTwitchResponseException,
+            "returned no GraphQL data.*SERVICE_UNAVAILABLE: upstream unavailable",
         ):
             self.twitch.load_channel_points_context(self.streamer)
 

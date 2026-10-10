@@ -248,10 +248,10 @@ class TwitchChannelPointsMiner:
                     continue
                 except UnexpectedTwitchResponseException as error:
                     logger.error(
-                        f"Skipping {streamer.username}: {error}",
+                        f"Cannot initialize {streamer.username}: {error}",
                         extra={"emoji": ":warning:"},
                     )
-                    continue
+                    raise
 
                 self.twitch.check_streamer_online(streamer)
                 initialized_streamers.append(streamer)
