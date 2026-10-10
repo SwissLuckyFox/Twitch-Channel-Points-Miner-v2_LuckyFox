@@ -337,93 +337,30 @@ Install the package via pip, you will find a stable version - maybe a different 
 
 ### Docker
 
-The following file is mounted :
+The Docker image expects a user-provided `run.py`. Mount that file and the `cookies`, `logs`, and `analytics` directories from persistent host storage so configuration and data survive container updates.
 
-- run.py : this is your starter script with your configuration
+#### GitHub Container Registry (GHCR) and Unraid
 
-These folders are mounted :
+The `Publish Docker image to GHCR` workflow publishes `ghcr.io/swissluckyfox/twitch-channel-points-miner-v2:latest` on pushes to `master`. It also publishes version and commit tags. The image supports `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
 
-- analytics : to save the analytics data
-- cookies : to provide login information
-- logs : to keep logs outside of container
+After the first successful workflow run, set the GHCR package visibility to **Public** if Unraid should pull it without registry credentials. In Unraid, add a container with this repository:
 
-**Example using docker-compose:**
-
-```yml
-version: "3.9"
-
-services:
-  miner:
-    image: tkdalex/twitch-channel-points-miner-v2
-    stdin_open: true
-    tty: true
-    environment:
-      - TERM=xterm-256color
-    volumes:
-      - ./analytics:/usr/src/app/analytics
-      - ./cookies:/usr/src/app/cookies
-      - ./logs:/usr/src/app/logs
-      - ./run.py:/usr/src/app/run.py:ro
-    ports:
-      - "5000:5000"
+```text
+ghcr.io/swissluckyfox/twitch-channel-points-miner-v2:latest
 ```
 
-Example with docker run:
-```sh
-docker run \
-    -v $(pwd)/analytics:/usr/src/app/analytics \
-    -v $(pwd)/cookies:/usr/src/app/cookies \
-    -v $(pwd)/logs:/usr/src/app/logs \
-    -v $(pwd)/run.py:/usr/src/app/run.py:ro \
-    -p 5000:5000 \
-    tkdalex/twitch-channel-points-miner-v2
-```
+Create your own `run.py` in appdata before starting the container. Do not commit Twitch credentials or other secrets to a public repository. Example mappings:
 
-`$(pwd)` Could not work on Windows (cmd), please use the absolute path instead, like: `/path/of/your/cookies:/usr/src/app/cookies`.
-If you don't mount the volume for the analytics (or cookies or logs) folder, the folder will be automatically created on the Docker container, and you will lose all the data when it is stopped.
-<<<<<<< HEAD
-If you don't have a cookie or It's your first time running the script, you will need to login to Twitch and start the container with `-it` args. If you need to run multiple containers you can bind different ports (only if you need also the analytics) and mount dirrent run.py file, like
-=======
+| Host path | Container path |
+| --- | --- |
+| `/mnt/user/appdata/twitch-channel-points-miner-v2/run.py` | `/usr/src/app/run.py` (read-only) |
+| `/mnt/user/appdata/twitch-channel-points-miner-v2/cookies` | `/usr/src/app/cookies` |
+| `/mnt/user/appdata/twitch-channel-points-miner-v2/logs` | `/usr/src/app/logs` |
+| `/mnt/user/appdata/twitch-channel-points-miner-v2/analytics` | `/usr/src/app/analytics` |
 
-#### Your own GitHub image on Unraid
+If you use analytics, map container port `5000` to an available host port. To update the app after a code change, push to `master`, wait for the GHCR workflow to succeed, then use Unraid's container update check. The appdata mounts remain in place.
 
-To publish your own image instead of using the Docker Hub image:
-
-1. After pushing this workflow to the `master` branch of your fork, GitHub Actions builds and publishes the image on pushes to `master` and on version tags. It tags the default branch as `latest`, and also publishes branch, version, and commit tags.
-2. In the fork, open **Actions** and enable workflows if GitHub prompts you to do so. After the first successful run, open the package under your GitHub profile and change its visibility to **Public** so Unraid can pull it without credentials.
-3. In Unraid, add a container and use `ghcr.io/swissluckyfox/twitch-channel-points-miner-v2:latest` as the repository/image. Alternatively, use this image in a Compose/Portainer stack:
-
-```yml
-services:
-  miner:
-    image: ghcr.io/swissluckyfox/twitch-channel-points-miner-v2:latest
-    stdin_open: true
-    tty: true
-    environment:
-      TERM: xterm-256color
-    volumes:
-      - /mnt/user/appdata/twitch-channel-points-miner-v2/analytics:/usr/src/app/analytics
-      - /mnt/user/appdata/twitch-channel-points-miner-v2/cookies:/usr/src/app/cookies
-      - /mnt/user/appdata/twitch-channel-points-miner-v2/logs:/usr/src/app/logs
-      - /mnt/user/appdata/twitch-channel-points-miner-v2/run.py:/usr/src/app/run.py:ro
-    ports:
-      - "5000:5000"
-```
-
-Create your own `run.py` in the appdata directory before starting the container; the image expects it to be mounted there. Keep that file and the data directories in appdata so they survive image updates. Do not put Twitch credentials or other secrets in a public repository.
-
-When a new image is published, use Unraid's container update check to pull and recreate the container; the mounted `run.py` and appdata directories stay in place. If you use a private GHCR package, configure registry credentials in Unraid instead of making the package public.
-
-If you don't have a cookie or it's your first time running the script, you will need to login to Twitch and start the container with `-it` args. If you need to run multiple containers you can bind different ports (only if you need also the analytics) and mount dirrent run.py file, like
-
->>>>>>> 7c2be03 (Test)
-```sh
-docker run --name user1-v $(pwd)/user1.py:/usr/src/app/run.py:ro -p 5001:5000 tkdalex/twitch-channel-points-miner-v2
-```
-
-```sh
-docker run --name user2-v $(pwd)/user2.py:/usr/src/app/run.py:ro -p 5002:5000 tkdalex/twitch-channel-points-miner-v2
-```
+If this is the first run and no Twitch cookie exists yet, the container needs an interactive terminal for login.
 
 About the *Docker* version; the community has always shown great interest in the Docker version of the project. Especially [@SethFalco](https://github.com/SethFalco) ([#79](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/79)), [@KamushekDev](https://github.com/KamushekDev) ([#300](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/pull/300)), [@au-ee](https://github.com/au-ee) ([#223](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/pull/223)) they showed their ideas. I've decided to merge the PR from [@RakSrinaNa](https://github.com/RakSrinaNa) ([#343](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/pull/343)) because is one of the most active user of the project and the PR was the only one with a Continuous Integration (CI).
 

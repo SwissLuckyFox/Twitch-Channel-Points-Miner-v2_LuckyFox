@@ -308,19 +308,12 @@ class Twitch(object):
                 streamers_watching = []
                 for prior in priority:
                     if prior == Priority.ORDER and len(streamers_watching) < 2:
-                        # Get the first 2 items, they are already in order
-<<<<<<< HEAD
-                        streamers_watching += streamers_index[:2]
-=======
-                        candidates = [
+                        # Preserve the configured order without selecting a streamer twice.
+                        streamers_watching += [
                             index
                             for index in streamers_index
                             if index not in streamers_watching
-                        ]
-                        streamers_watching.update(
-                            candidates[:remaining_watch_amount()]
-                        )
->>>>>>> 010f449 (Test)
+                        ][: 2 - len(streamers_watching)]
 
                     elif (
                         prior in [Priority.POINTS_ASCENDING, Priority.POINTS_DESCEDING]
@@ -368,19 +361,12 @@ class Twitch(object):
 
                     elif prior == Priority.DROPS and len(streamers_watching) < 2:
                         for index in streamers_index:
-<<<<<<< HEAD
-                            if streamers[index].drops_condition() is True:
-                                streamers_watching.append(index)
-                                if len(streamers_watching) == 2:
-=======
                             if (
                                 index not in streamers_watching
                                 and streamers[index].drops_condition() is True
-                                and streamers[index].stream.campaigns
                             ):
-                                streamers_watching.add(index)
-                                if remaining_watch_amount() <= 0:
->>>>>>> 010f449 (Test)
+                                streamers_watching.append(index)
+                                if len(streamers_watching) == 2:
                                     break
 
                     elif prior == Priority.SUBSCRIBED and len(streamers_watching) < 2:
@@ -464,20 +450,11 @@ class Twitch(object):
                         logger.error(f"Error while trying to send minute watched: {e}")
                         self.__check_connection_handler(chunk_size)
                     except requests.exceptions.Timeout as e:
-<<<<<<< HEAD
                         logger.error(f"Error while trying to send minute watched: {e}")
 
                     self.__chuncked_sleep(
                         next_iteration - time.time(), chunk_size=chunk_size
                     )
-=======
-                        logger.error(
-                            f"Error while trying to send minute watched: {e}")
-                    finally:
-                        self.__chuncked_sleep(
-                            next_iteration - time.time(), chunk_size=chunk_size
-                        )
->>>>>>> 010f449 (Test)
 
                 if streamers_watching == []:
                     self.__chuncked_sleep(60, chunk_size=chunk_size)
