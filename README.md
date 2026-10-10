@@ -341,7 +341,7 @@ The Docker image expects a user-provided `run.py`. Mount that file and the `cook
 
 #### GitHub Container Registry (GHCR) and Unraid
 
-The `Publish Docker image to GHCR` workflow publishes `ghcr.io/swissluckyfox/twitch-channel-points-miner-v2:latest` on pushes to `master`. It also publishes version and commit tags. The image supports `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
+The `Publish Docker image to GHCR` workflow publishes `ghcr.io/swissluckyfox/twitch-channel-points-miner-v2:latest` on pushes to `master`. It also publishes version and commit tags. The image is built for `linux/amd64`, the architecture used by most Unraid servers.
 
 After the first successful workflow run, set the GHCR package visibility to **Public** if Unraid should pull it without registry credentials. In Unraid, add a container with this repository:
 
