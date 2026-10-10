@@ -364,6 +364,8 @@ If this is the first run and no Twitch cookie exists yet, the container needs an
 
 The repository includes [`run.template.py`](./run.template.py) as a starting point for this fork's supported settings. Copy it to `run.py` in appdata and configure `TWITCH_USERNAME`; optionally set `TWITCH_PASSWORD`, `TELEGRAM_CHAT_ID`, `TELEGRAM_BOT_TOKEN`, and `DISCORD_WEBHOOK_URL` as container environment variables.
 
+To have Unraid show the paths and environment-variable fields automatically, install [`unraid-template.xml`](./unraid-template.xml) as a User Template on the Unraid host (for example, save it as `/boot/config/plugins/dockerMan/templates-user/my-LuckyTwitchMiner.xml`) and select it when adding the container. An image build alone cannot add fields to Unraid's UI. Optional Telegram/Discord settings that are absent or malformed are disabled with a warning; remote service rejections and network errors are also logged without stopping mining.
+
 About the *Docker* version; the community has always shown great interest in the Docker version of the project. Especially [@SethFalco](https://github.com/SethFalco) ([#79](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/79)), [@KamushekDev](https://github.com/KamushekDev) ([#300](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/pull/300)), [@au-ee](https://github.com/au-ee) ([#223](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/pull/223)) they showed their ideas. I've decided to merge the PR from [@RakSrinaNa](https://github.com/RakSrinaNa) ([#343](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/pull/343)) because is one of the most active user of the project and the PR was the only one with a Continuous Integration (CI).
 
 ### Limits

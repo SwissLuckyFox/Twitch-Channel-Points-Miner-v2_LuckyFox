@@ -3,6 +3,8 @@
 
 import logging
 import os
+import re
+from urllib.parse import urlsplit
 
 from colorama import Fore
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
@@ -24,16 +26,33 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import (
 )
 from TwitchChannelPointsMiner.logger import ColorPalette, LoggerSettings
 
+logger = logging.getLogger("run")
+logger.setLevel(logging.INFO)
+logger.propagate = False
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+    logger.addHandler(handler)
+
 
 def optional_telegram():
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if not chat_id and not token:
         return None
     if not chat_id or not token:
-        raise ValueError(
-            "Set both TELEGRAM_CHAT_ID and TELEGRAM_BOT_TOKEN, or leave both unset."
+        logger.warning(
+            "Telegram disabled: set both TELEGRAM_CHAT_ID and "
+            "TELEGRAM_BOT_TOKEN, or leave both empty."
         )
+        return None
+
+    if not re.fullmatch(r"-?\d+", chat_id):
+        logger.warning("Telegram disabled: TELEGRAM_CHAT_ID must be an integer.")
+        return None
+    if not re.fullmatch(r"\d+:[A-Za-z0-9_-]{20,}", token):
+        logger.warning("Telegram disabled: TELEGRAM_BOT_TOKEN has an invalid format.")
+        return None
 
     return Telegram(
         chat_id=int(chat_id),
@@ -54,8 +73,19 @@ def optional_telegram():
 
 
 def optional_discord():
-    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
     if not webhook_url:
+        return None
+
+    parsed_url = urlsplit(webhook_url)
+    if (
+        parsed_url.scheme != "https"
+        or parsed_url.hostname not in {"discord.com", "discordapp.com"}
+        or not re.fullmatch(r"/api/webhooks/\d+/[^/]+/?", parsed_url.path)
+    ):
+        logger.warning(
+            "Discord disabled: DISCORD_WEBHOOK_URL is not a valid Discord webhook URL."
+        )
         return None
 
     return Discord(
@@ -68,8 +98,13 @@ def optional_discord():
     )
 
 
+username = os.getenv("TWITCH_USERNAME", "").strip()
+if not username:
+    logger.error("TWITCH_USERNAME is required; set it in the Unraid container variables.")
+    raise SystemExit(2)
+
 twitch_miner = TwitchChannelPointsMiner(
-    username=os.environ["TWITCH_USERNAME"],
+    username=username,
     password=os.getenv("TWITCH_PASSWORD") or None,
     claim_drops_startup=False,
     priority=[

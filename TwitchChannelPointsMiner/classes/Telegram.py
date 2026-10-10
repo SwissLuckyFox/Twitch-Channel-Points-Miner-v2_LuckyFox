@@ -1,8 +1,11 @@
+import logging
 from textwrap import dedent
 
 import requests
 
 from TwitchChannelPointsMiner.classes.Settings import Events
+
+logger = logging.getLogger(__name__)
 
 
 class Telegram(object):
@@ -18,12 +21,28 @@ class Telegram(object):
 
     def send(self, message: str, event: Events) -> None:
         if str(event) in self.events:
-            requests.post(
-                url=self.telegram_api,
-                data={
-                    "chat_id": self.chat_id,
-                    "text": dedent(message),
-                    "disable_web_page_preview": True,  # include link to twitch streamer?
-                    "disable_notification": self.disable_notification,  # no sound, notif just in tray
-                },
-            )
+            try:
+                response = requests.post(
+                    url=self.telegram_api,
+                    data={
+                        "chat_id": self.chat_id,
+                        "text": dedent(message),
+                        "disable_web_page_preview": True,
+                        "disable_notification": self.disable_notification,
+                    },
+                    timeout=10,
+                )
+                response.raise_for_status()
+                result = response.json()
+                if not isinstance(result, dict) or not result.get("ok", False):
+                    logger.warning(
+                        "Telegram rejected a notification: %s",
+                        result.get("description", "unexpected API response")
+                        if isinstance(result, dict)
+                        else "unexpected API response",
+                    )
+            except (requests.exceptions.RequestException, ValueError) as error:
+                logger.warning(
+                    "Could not send Telegram notification (%s).",
+                    type(error).__name__,
+                )

@@ -1,8 +1,11 @@
+import logging
 from textwrap import dedent
 
 import requests
 
 from TwitchChannelPointsMiner.classes.Settings import Events
+
+logger = logging.getLogger(__name__)
 
 
 class Discord(object):
@@ -14,11 +17,19 @@ class Discord(object):
 
     def send(self, message: str, event: Events) -> None:
         if str(event) in self.events:
-            requests.post(
-                url=self.webhook_api,
-                data={
-                    "content": dedent(message),
-                    "username": "Twitch Channel Points Miner",
-                    "avatar_url": "https://i.imgur.com/X9fEkhT.png",
-                },
-            )
+            try:
+                response = requests.post(
+                    url=self.webhook_api,
+                    data={
+                        "content": dedent(message),
+                        "username": "Twitch Channel Points Miner",
+                        "avatar_url": "https://i.imgur.com/X9fEkhT.png",
+                    },
+                    timeout=10,
+                )
+                response.raise_for_status()
+            except requests.exceptions.RequestException as error:
+                logger.warning(
+                    "Could not send Discord notification (%s).",
+                    type(error).__name__,
+                )
