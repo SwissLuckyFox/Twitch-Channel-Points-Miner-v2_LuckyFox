@@ -262,6 +262,62 @@ class ChannelPointsContextTests(unittest.TestCase):
         self.assertIsNone(self.streamer.stream.spade_url)
         get.assert_called_once()
 
+    def test_drops_dashboard_without_campaigns_returns_empty_list(self):
+        for response in (
+            {},
+            {"data": {"currentUser": None}},
+            {"data": {"currentUser": {"dropCampaigns": None}}},
+            {"errors": [{"message": "failed integrity check"}], "data": None},
+        ):
+            with self.subTest(response=response):
+                self.post_gql_request.return_value = response
+                self.assertEqual(
+                    self.twitch._Twitch__get_drops_dashboard(status="ACTIVE"), []
+                )
+
+    def test_drops_dashboard_filters_by_status(self):
+        self.post_gql_request.return_value = {
+            "data": {
+                "currentUser": {
+                    "dropCampaigns": [
+                        {"id": "a", "status": "ACTIVE"},
+                        {"id": "b", "status": "EXPIRED"},
+                        None,
+                    ]
+                }
+            }
+        }
+
+        self.assertEqual(
+            self.twitch._Twitch__get_drops_dashboard(status="active"),
+            [{"id": "a", "status": "ACTIVE"}],
+        )
+
+    def test_campaign_details_skip_malformed_responses(self):
+        self.twitch.twitch_login = Mock()
+        self.twitch.twitch_login.get_user_id.return_value = "123"
+        self.post_gql_request.return_value = [
+            {"data": {"user": {"dropCampaign": {"id": "a"}}}},
+            {"data": {"user": None}},
+            {"errors": [{"message": "boom"}]},
+            {"data": {"user": {"dropCampaign": None}}},
+        ]
+
+        result = self.twitch._Twitch__get_campaigns_details(
+            [{"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "d"}]
+        )
+
+        self.assertEqual(result, [{"id": "a"}])
+
+    def test_campaign_details_ignore_non_list_response(self):
+        self.twitch.twitch_login = Mock()
+        self.twitch.twitch_login.get_user_id.return_value = "123"
+        self.post_gql_request.return_value = {}
+
+        self.assertEqual(
+            self.twitch._Twitch__get_campaigns_details([{"id": "a"}]), []
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -41,6 +41,23 @@ class Telegram(object):
                         if isinstance(result, dict)
                         else "unexpected API response",
                     )
+            except requests.exceptions.HTTPError as error:
+                # Never log the request URL: it contains the bot token.
+                response = error.response
+                status = response.status_code if response is not None else "unknown"
+                description = "no description"
+                if response is not None:
+                    try:
+                        description = response.json().get(
+                            "description", description
+                        )
+                    except (ValueError, AttributeError):
+                        pass
+                logger.warning(
+                    "Could not send Telegram notification (HTTP %s: %s).",
+                    status,
+                    description,
+                )
             except (requests.exceptions.RequestException, ValueError) as error:
                 logger.warning(
                     "Could not send Telegram notification (%s).",

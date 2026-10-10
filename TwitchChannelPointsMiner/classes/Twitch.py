@@ -747,9 +747,21 @@ class Twitch(object):
 
     def __get_drops_dashboard(self, status=None):
         response = self.post_gql_request(GQLOperations.ViewerDropsDashboard)
-        campaigns = response["data"]["currentUser"]["dropCampaigns"]
+        try:
+            campaigns = response["data"]["currentUser"]["dropCampaigns"]
+        except (KeyError, TypeError):
+            campaigns = None
+
+        if not isinstance(campaigns, list):
+            logger.debug(
+                "Twitch returned no drop campaigns.%s",
+                _graphql_error_details(response),
+            )
+            return []
+
+        campaigns = [c for c in campaigns if isinstance(c, dict)]
         if status is not None:
-            campaigns = list(filter(lambda x: x["status"] == status.upper(), campaigns))
+            campaigns = [c for c in campaigns if c.get("status") == status.upper()]
         return campaigns
 
     def __get_campaigns_details(self, campaigns):
@@ -765,9 +777,16 @@ class Twitch(object):
                 }
 
             response = self.post_gql_request(json_data)
+            if not isinstance(response, list):
+                logger.debug("Unexpected campaigns response format, skipping chunk")
+                continue
             for r in response:
-                if r["data"]["user"] is not None:
-                    result.append(r["data"]["user"]["dropCampaign"])
+                try:
+                    drop_campaign = r["data"]["user"]["dropCampaign"]
+                except (KeyError, TypeError):
+                    continue
+                if drop_campaign is not None:
+                    result.append(drop_campaign)
         return result
 
     def __sync_campaigns(self, campaigns):
@@ -936,7 +955,12 @@ class Twitch(object):
                             campaign.id for campaign in eligible_campaigns
                         ]
 
-            except (ValueError, KeyError, requests.exceptions.ConnectionError) as e:
+            except (
+                ValueError,
+                KeyError,
+                TypeError,
+                requests.exceptions.ConnectionError,
+            ) as e:
                 logger.error(f"Error while syncing inventory: {e}")
                 self.__check_connection_handler(chunk_size)
 
