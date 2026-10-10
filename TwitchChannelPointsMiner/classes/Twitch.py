@@ -686,11 +686,8 @@ class Twitch(object):
 
     def sync_campaigns(self, streamers, chunk_size=3):
         campaigns_update = 0
-<<<<<<< HEAD
-=======
         campaigns = []
         discovered_streamers = {}
->>>>>>> 010f449 (Test)
         while self.running:
             try:
                 # Get update from dashboard each 60minutes
