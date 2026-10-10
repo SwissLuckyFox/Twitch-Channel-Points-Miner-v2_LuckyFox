@@ -337,7 +337,7 @@ Install the package via pip, you will find a stable version - maybe a different 
 
 ### Docker
 
-The Docker image includes the fork-compatible `run.py`. Mount the `cookies`, `logs`, `analytics`, and `config` directories from persistent host storage so login data, miner data, and your personal streamer list survive container updates.
+The Docker image includes the fork-compatible `run.py`. Mount the `cookies`, `logs`, and `analytics` directories, plus your `streamers.txt` file, from persistent host storage so login data, miner data, and your personal streamer list survive container updates.
 
 #### GitHub Container Registry (GHCR) and Unraid
 
@@ -356,13 +356,13 @@ The `run.py` script is included in the image and comes from [`run.template.py`](
 | `/mnt/user/appdata/twitch-channel-points-miner-v2/cookies` | `/usr/src/app/cookies` |
 | `/mnt/user/appdata/twitch-channel-points-miner-v2/logs` | `/usr/src/app/logs` |
 | `/mnt/user/appdata/twitch-channel-points-miner-v2/analytics` | `/usr/src/app/analytics` |
-| `/mnt/user/appdata/twitch-channel-points-miner-v2/config` | `/usr/src/app/user-config` |
+| `/mnt/user/appdata/twitch-channel-points-miner-v2/config/streamers.txt` | `/usr/src/app/user-config/streamers.txt` (read-only) |
 
 If you use analytics, map container port `5000` to an available host port. To update the app after a code change, push to `master`, wait for the GHCR workflow to succeed, then use Unraid's container update check. The appdata mounts remain in place.
 
 If this is the first run and no Twitch cookie exists yet, the container needs an interactive terminal for login.
 
-Copy [`streamers.txt.example`](./streamers.txt.example) to `/mnt/user/appdata/twitch-channel-points-miner-v2/config/streamers.txt` and edit that file to list your own streamers, one Twitch username per line. Blank lines and lines starting with `#` are ignored. An optional second value can set per-streamer chat behavior, for example `my_channel chat=ONLINE`; allowed values are `ALWAYS`, `NEVER`, `ONLINE`, and `OFFLINE`. This file is stored in appdata, so your personal list remains unchanged when the image is updated.
+Create a `streamers.txt` file on Unraid before starting the container, then set the **Streamer list** host path in the Unraid template to the full path of that file; the container path remains `/usr/src/app/user-config/streamers.txt`. For example, use `/mnt/user/appdata/twitch-channel-points-miner-v2/config/streamers.txt`. Add one Twitch username per line. Blank lines and lines starting with `#` are ignored. An optional second value can set per-streamer chat behavior, for example `my_channel chat=ONLINE`; allowed values are `ALWAYS`, `NEVER`, `ONLINE`, and `OFFLINE`. This file is stored in appdata, so your personal list remains unchanged when the image is updated. A ready-made example list is available in [`streamers.txt.example`](./streamers.txt.example).
 
 Configure `TWITCH_USERNAME`; optionally set `TWITCH_PASSWORD`, `TELEGRAM_CHAT_ID`, `TELEGRAM_BOT_TOKEN`, and `DISCORD_WEBHOOK_URL` as container environment variables. To customize other script settings, edit `run.template.py` in the repository and publish a new image.
 

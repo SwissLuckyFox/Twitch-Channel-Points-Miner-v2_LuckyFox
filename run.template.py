@@ -28,7 +28,7 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import (
 from TwitchChannelPointsMiner.logger import ColorPalette, LoggerSettings
 
 logger = logging.getLogger("run")
-STREAMERS_FILE = Path(__file__).resolve().parent / "user-config" / "streamers.txt"
+STREAMERS_FILE = Path("/usr/src/app/user-config/streamers.txt")
 logger.setLevel(logging.INFO)
 logger.propagate = False
 if not logger.handlers:
@@ -215,8 +215,13 @@ def build_streamers(streamers_file=STREAMERS_FILE):
                 streamers.append(Streamer(username, settings=settings))
     except FileNotFoundError as error:
         raise ValueError(
-            f"Streamer list not found: {streamers_file}. Create this file in the "
-            "mapped Unraid appdata config directory."
+            f"Streamer list not found at {streamers_file}. Create the file on the "
+            "Unraid host and set the Streamer list path mapping to that file."
+        ) from error
+    except IsADirectoryError as error:
+        raise ValueError(
+            f"Streamer list path {streamers_file} points to a directory, not a "
+            "file. Create streamers.txt on the Unraid host and map that file."
         ) from error
 
     if not streamers:

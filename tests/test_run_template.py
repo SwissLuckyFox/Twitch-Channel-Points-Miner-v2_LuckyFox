@@ -94,10 +94,19 @@ class RunTemplateTests(unittest.TestCase):
 
     def test_missing_streamer_file_has_actionable_error(self):
         with tempfile.TemporaryDirectory() as config_directory:
-            missing_file = Path(config_directory) / "missing.txt"
+            streamer_file = Path(config_directory) / "missing.txt"
 
-            with self.assertRaisesRegex(ValueError, "Streamer list not found"):
-                run_template.build_streamers(missing_file)
+            with self.assertRaisesRegex(
+                ValueError, "Create the file on the Unraid host"
+            ):
+                run_template.build_streamers(streamer_file)
+
+            self.assertFalse(streamer_file.exists())
+
+    def test_streamer_path_that_is_a_directory_has_actionable_error(self):
+        with tempfile.TemporaryDirectory() as config_directory:
+            with self.assertRaisesRegex(ValueError, "points to a directory"):
+                run_template.build_streamers(config_directory)
 
     def test_empty_streamer_file_is_rejected(self):
         with tempfile.TemporaryDirectory() as config_directory:
