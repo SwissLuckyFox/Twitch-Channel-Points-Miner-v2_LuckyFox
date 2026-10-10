@@ -29,7 +29,9 @@ class RunTemplateTests(unittest.TestCase):
         self.assertEqual(kwargs["username"], "ci-validation-user")
 
     def test_optional_notifications_are_disabled_when_empty(self):
-        with patch.dict(os.environ, {}, clear=True):
+        with patch.dict(
+            os.environ, {"TWITCH_USERNAME": "ci-validation-user"}, clear=True
+        ):
             settings = run_template.build_miner_kwargs()["logger_settings"]
 
         self.assertIsNone(settings.telegram)
@@ -39,6 +41,7 @@ class RunTemplateTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
+                "TWITCH_USERNAME": "ci-validation-user",
                 "TELEGRAM_CHAT_ID": "not-an-id",
                 "TELEGRAM_BOT_TOKEN": "invalid-token",
                 "DISCORD_WEBHOOK_URL": "http://example.com/webhook",
@@ -54,6 +57,7 @@ class RunTemplateTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
+                "TWITCH_USERNAME": "ci-validation-user",
                 "TELEGRAM_CHAT_ID": "-12345",
                 "TELEGRAM_BOT_TOKEN": "123456:abcdefghijklmnopqrstuvwxyz",
                 "DISCORD_WEBHOOK_URL": (
