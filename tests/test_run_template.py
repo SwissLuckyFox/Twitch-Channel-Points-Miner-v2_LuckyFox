@@ -85,10 +85,10 @@ class RunTemplateTests(unittest.TestCase):
             )
             streamers = run_template.build_streamers(streamers_file)
 
-        self.assertEqual([streamer.username for streamer in streamers], [
-            "my_channel",
-            "AnotherChannel",
-        ])
+        self.assertEqual(
+            [streamer.username for streamer in streamers],
+            ["my_channel", "anotherchannel"],
+        )
         self.assertEqual(streamers[0].settings.chat, ChatPresence.ONLINE)
         self.assertIsNone(streamers[1].settings)
 
