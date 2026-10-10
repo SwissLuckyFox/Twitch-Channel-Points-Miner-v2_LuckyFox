@@ -4,6 +4,7 @@
 import logging
 import os
 import re
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from colorama import Fore
@@ -27,6 +28,7 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import (
 from TwitchChannelPointsMiner.logger import ColorPalette, LoggerSettings
 
 logger = logging.getLogger("run")
+STREAMERS_FILE = Path(__file__).resolve().parent / "user-config" / "streamers.txt"
 logger.setLevel(logging.INFO)
 logger.propagate = False
 if not logger.handlers:
@@ -165,33 +167,71 @@ def build_miner_kwargs():
     }
 
 
-def build_streamers():
-    return [
-        Streamer(
-            "corgicam",
-            settings=StreamerSettings(chat=ChatPresence.ONLINE),
-        ),
-        Streamer("caboose2253"),
-        Streamer("zezeipanther"),
-        Streamer("puppyava"),
-        Streamer("helluvadragon"),
-        Streamer("daxxfluff"),
-        Streamer("zuzazaleno"),
-        Streamer("lefunseeker"),
-        Streamer("torrock_tigerfish"),
-        Streamer("kibblesgg"),
-        Streamer("sleepydoom"),
-        Streamer("kanjoyume"),
-        Streamer("allubillis"),
-        Streamer("litheoss"),
-        Streamer("merlekoz"),
-        Streamer("ivydafurry"),
-    ]
+def build_streamers(streamers_file=STREAMERS_FILE):
+    streamers = []
+    usernames = set()
+
+    try:
+        with Path(streamers_file).open(encoding="utf-8") as stream:
+            for line_number, raw_line in enumerate(stream, start=1):
+                line = raw_line.partition("#")[0].strip()
+                if not line:
+                    continue
+
+                fields = line.split()
+                if len(fields) > 2:
+                    raise ValueError(
+                        f"{streamers_file}:{line_number}: expected a username "
+                        "and optional chat=SETTING."
+                    )
+
+                username = fields[0]
+                username_key = username.casefold()
+                if username_key in usernames:
+                    raise ValueError(
+                        f"{streamers_file}:{line_number}: duplicate streamer "
+                        f"'{username}'."
+                    )
+
+                settings = None
+                if len(fields) == 2:
+                    option, separator, value = fields[1].partition("=")
+                    if not separator or option.casefold() != "chat":
+                        raise ValueError(
+                            f"{streamers_file}:{line_number}: unsupported option "
+                            f"'{fields[1]}'; use chat=ALWAYS|NEVER|ONLINE|OFFLINE."
+                        )
+                    try:
+                        settings = StreamerSettings(
+                            chat=ChatPresence[value.upper()]
+                        )
+                    except KeyError as error:
+                        raise ValueError(
+                            f"{streamers_file}:{line_number}: invalid chat setting "
+                            f"'{value}'; use ALWAYS, NEVER, ONLINE, or OFFLINE."
+                        ) from error
+
+                usernames.add(username_key)
+                streamers.append(Streamer(username, settings=settings))
+    except FileNotFoundError as error:
+        raise ValueError(
+            f"Streamer list not found: {streamers_file}. Create this file in the "
+            "mapped Unraid appdata config directory."
+        ) from error
+
+    if not streamers:
+        raise ValueError(
+            f"No streamers configured in {streamers_file}. Add one Twitch "
+            "username per line."
+        )
+
+    return streamers
 
 
 def main():
     try:
         miner_kwargs = build_miner_kwargs()
+        streamers = build_streamers()
     except ValueError as error:
         logger.error("%s", error)
         raise SystemExit(2) from error
@@ -199,7 +239,7 @@ def main():
     twitch_miner = TwitchChannelPointsMiner(**miner_kwargs)
     twitch_miner.analytics(host="0.0.0.0", port=5000, refresh=5, days_ago=7)
     twitch_miner.mine(
-        build_streamers(),
+        streamers,
         followers=True,
         followers_order=FollowersOrder.ASC,
     )

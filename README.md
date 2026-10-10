@@ -337,7 +337,7 @@ Install the package via pip, you will find a stable version - maybe a different 
 
 ### Docker
 
-The Docker image expects a user-provided `run.py`. Mount that file and the `cookies`, `logs`, and `analytics` directories from persistent host storage so configuration and data survive container updates.
+The Docker image includes the fork-compatible `run.py`. Mount the `cookies`, `logs`, `analytics`, and `config` directories from persistent host storage so login data, miner data, and your personal streamer list survive container updates.
 
 #### GitHub Container Registry (GHCR) and Unraid
 
@@ -349,22 +349,24 @@ After the first successful workflow run, set the GHCR package visibility to **Pu
 ghcr.io/swissluckyfox/twitch-channel-points-miner-v2:latest
 ```
 
-Create your own `run.py` in appdata before starting the container. Do not commit Twitch credentials or other secrets to a public repository. Example mappings:
+The `run.py` script is included in the image and comes from [`run.template.py`](./run.template.py); it is replaced on every image update. Do not mount a host `run.py` over `/usr/src/app/run.py`, because Docker bind mounts hide the image's copy and can keep an outdated script active. Do not commit Twitch credentials or other secrets to a public repository. Example mappings:
 
 | Host path | Container path |
 | --- | --- |
-| `/mnt/user/appdata/twitch-channel-points-miner-v2/run.py` | `/usr/src/app/run.py` (read-only) |
 | `/mnt/user/appdata/twitch-channel-points-miner-v2/cookies` | `/usr/src/app/cookies` |
 | `/mnt/user/appdata/twitch-channel-points-miner-v2/logs` | `/usr/src/app/logs` |
 | `/mnt/user/appdata/twitch-channel-points-miner-v2/analytics` | `/usr/src/app/analytics` |
+| `/mnt/user/appdata/twitch-channel-points-miner-v2/config` | `/usr/src/app/user-config` |
 
 If you use analytics, map container port `5000` to an available host port. To update the app after a code change, push to `master`, wait for the GHCR workflow to succeed, then use Unraid's container update check. The appdata mounts remain in place.
 
 If this is the first run and no Twitch cookie exists yet, the container needs an interactive terminal for login.
 
-The repository includes [`run.template.py`](./run.template.py) as a starting point for this fork's supported settings. Copy it to `run.py` in appdata and configure `TWITCH_USERNAME`; optionally set `TWITCH_PASSWORD`, `TELEGRAM_CHAT_ID`, `TELEGRAM_BOT_TOKEN`, and `DISCORD_WEBHOOK_URL` as container environment variables.
+Copy [`streamers.txt.example`](./streamers.txt.example) to `/mnt/user/appdata/twitch-channel-points-miner-v2/config/streamers.txt` and edit that file to list your own streamers, one Twitch username per line. Blank lines and lines starting with `#` are ignored. An optional second value can set per-streamer chat behavior, for example `my_channel chat=ONLINE`; allowed values are `ALWAYS`, `NEVER`, `ONLINE`, and `OFFLINE`. This file is stored in appdata, so your personal list remains unchanged when the image is updated.
 
-To have Unraid show the paths and environment-variable fields automatically, install [`unraid-template.xml`](./unraid-template.xml) as a User Template on the Unraid host (for example, save it as `/boot/config/plugins/dockerMan/templates-user/my-LuckyTwitchMiner.xml`) and select it when adding the container. An image build alone cannot add fields to Unraid's UI. Optional Telegram/Discord settings that are absent or malformed are disabled with a warning; remote service rejections and network errors are also logged without stopping mining.
+Configure `TWITCH_USERNAME`; optionally set `TWITCH_PASSWORD`, `TELEGRAM_CHAT_ID`, `TELEGRAM_BOT_TOKEN`, and `DISCORD_WEBHOOK_URL` as container environment variables. To customize other script settings, edit `run.template.py` in the repository and publish a new image.
+
+To have Unraid show the paths and environment-variable fields automatically, install [`unraid-template.xml`](./unraid-template.xml) as a User Template on the Unraid host (for example, save it as `/boot/config/plugins/dockerMan/templates-user/my-LuckyTwitchMiner.xml`) and select it when adding the container. An image build alone cannot add fields to Unraid's UI. When migrating an existing container, remove its old `/usr/src/app/run.py` bind mount and recreate it from the updated template; otherwise the old appdata script will continue to override the image copy. Optional Telegram/Discord settings that are absent or malformed are disabled with a warning; remote service rejections and network errors are also logged without stopping mining.
 
 About the *Docker* version; the community has always shown great interest in the Docker version of the project. Especially [@SethFalco](https://github.com/SethFalco) ([#79](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/79)), [@KamushekDev](https://github.com/KamushekDev) ([#300](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/pull/300)), [@au-ee](https://github.com/au-ee) ([#223](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/pull/223)) they showed their ideas. I've decided to merge the PR from [@RakSrinaNa](https://github.com/RakSrinaNa) ([#343](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/pull/343)) because is one of the most active user of the project and the PR was the only one with a Continuous Integration (CI).
 

@@ -29,4 +29,5 @@ RUN apt-get update \
   && rm -rf /usr/share/doc/*
 
 ADD ./TwitchChannelPointsMiner ./TwitchChannelPointsMiner
+COPY ./run.template.py ./run.py
 ENTRYPOINT [ "python", "run.py" ]

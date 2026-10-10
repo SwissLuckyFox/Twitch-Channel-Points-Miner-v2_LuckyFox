@@ -9,7 +9,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/SwissLuckyFox/Twitch-Channel-Points-Miner-v2_LuckyFox</Support>
   <Project>https://github.com/SwissLuckyFox/Twitch-Channel-Points-Miner-v2_LuckyFox</Project>
-  <Overview>Twitch Channel Points Miner. Mount a custom run.py from appdata and configure environment variables below.</Overview>
+  <Overview>Twitch Channel Points Miner. The run.py script is included in the image and updated with each image update. Configure environment variables below.</Overview>
   <Category>GameServers:</Category>
   <WebUI>http://[IP]:[PORT:5000]/</WebUI>
   <TemplateURL/>
@@ -21,10 +21,10 @@
   <DonateText/>
   <DonateLink/>
   <Requires/>
-  <Config Name="Run script" Target="/usr/src/app/run.py" Default="/mnt/user/appdata/twitch-channel-points-miner-v2/run.py" Mode="ro" Description="User configuration script. Copy run.template.py here as run.py." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/twitch-channel-points-miner-v2/run.py</Config>
   <Config Name="Cookies" Target="/usr/src/app/cookies" Default="/mnt/user/appdata/twitch-channel-points-miner-v2/cookies" Mode="rw" Description="Persistent Twitch login cookies." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/twitch-channel-points-miner-v2/cookies</Config>
   <Config Name="Logs" Target="/usr/src/app/logs" Default="/mnt/user/appdata/twitch-channel-points-miner-v2/logs" Mode="rw" Description="Persistent log files." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/twitch-channel-points-miner-v2/logs</Config>
   <Config Name="Analytics" Target="/usr/src/app/analytics" Default="/mnt/user/appdata/twitch-channel-points-miner-v2/analytics" Mode="rw" Description="Persistent analytics data." Type="Path" Display="always" Required="false" Mask="false">/mnt/user/appdata/twitch-channel-points-miner-v2/analytics</Config>
+  <Config Name="User config" Target="/usr/src/app/user-config" Default="/mnt/user/appdata/twitch-channel-points-miner-v2/config" Mode="rw" Description="Persistent user configuration directory. Put your streamers.txt file here." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/twitch-channel-points-miner-v2/config</Config>
   <Config Name="Analytics port" Target="5000" Default="5000" Mode="tcp" Description="Analytics web interface port." Type="Port" Display="always" Required="false" Mask="false">5000</Config>
   <Config Name="Twitch username" Target="TWITCH_USERNAME" Default="" Mode="" Description="Required Twitch username." Type="Variable" Display="always" Required="true" Mask="false"></Config>
   <Config Name="Twitch password" Target="TWITCH_PASSWORD" Default="" Mode="" Description="Optional. Leave empty to use an existing login cookie or interactive login." Type="Variable" Display="always" Required="false" Mask="true"></Config>

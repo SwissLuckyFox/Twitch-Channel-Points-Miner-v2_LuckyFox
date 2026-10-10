@@ -2,17 +2,19 @@ import importlib.util
 import inspect
 import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
+from TwitchChannelPointsMiner.classes.Chat import ChatPresence
 
 
-TEMPLATE_PATH = Path("/usr/src/app/run.template.py")
-if not TEMPLATE_PATH.is_file():
-    TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "run.template.py"
+RUN_SCRIPT_PATH = Path("/usr/src/app/run.py")
+if not RUN_SCRIPT_PATH.is_file():
+    RUN_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "run.template.py"
 
-spec = importlib.util.spec_from_file_location("run_template", TEMPLATE_PATH)
+spec = importlib.util.spec_from_file_location("run_template", RUN_SCRIPT_PATH)
 run_template = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(run_template)
 
@@ -73,10 +75,45 @@ class RunTemplateTests(unittest.TestCase):
         self.assertIsNotNone(settings.discord)
 
     def test_streamers_use_fork_settings(self):
-        streamers = run_template.build_streamers()
+        with tempfile.TemporaryDirectory() as config_directory:
+            streamers_file = Path(config_directory) / "streamers.txt"
+            streamers_file.write_text(
+                "# Individual Twitch streamers\n"
+                "my_channel chat=ONLINE\n"
+                "AnotherChannel\n",
+                encoding="utf-8",
+            )
+            streamers = run_template.build_streamers(streamers_file)
 
-        self.assertTrue(streamers)
-        self.assertEqual(streamers[0].username, "corgicam")
+        self.assertEqual([streamer.username for streamer in streamers], [
+            "my_channel",
+            "AnotherChannel",
+        ])
+        self.assertEqual(streamers[0].settings.chat, ChatPresence.ONLINE)
+        self.assertIsNone(streamers[1].settings)
+
+    def test_missing_streamer_file_has_actionable_error(self):
+        with tempfile.TemporaryDirectory() as config_directory:
+            missing_file = Path(config_directory) / "missing.txt"
+
+            with self.assertRaisesRegex(ValueError, "Streamer list not found"):
+                run_template.build_streamers(missing_file)
+
+    def test_empty_streamer_file_is_rejected(self):
+        with tempfile.TemporaryDirectory() as config_directory:
+            streamers_file = Path(config_directory) / "streamers.txt"
+            streamers_file.write_text("# Add streamer names below\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "No streamers configured"):
+                run_template.build_streamers(streamers_file)
+
+    def test_invalid_chat_setting_is_rejected(self):
+        with tempfile.TemporaryDirectory() as config_directory:
+            streamers_file = Path(config_directory) / "streamers.txt"
+            streamers_file.write_text("my_channel chat=SOMETIMES\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "invalid chat setting"):
+                run_template.build_streamers(streamers_file)
 
 
 if __name__ == "__main__":

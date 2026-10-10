@@ -24,13 +24,11 @@ jobs:
       - name: Compile project and test run template in Docker
         run: |
           docker run --rm \
-            --mount "type=bind,source=${GITHUB_WORKSPACE}/run.template.py,target=/usr/src/app/run.template.py,readonly" \
             --mount "type=bind,source=${GITHUB_WORKSPACE}/tests,target=/tmp/tests,readonly" \
             --entrypoint python \
             twitch-channel-points-miner:validation \
-            -m compileall -q /usr/src/app/TwitchChannelPointsMiner
+            -m compileall -q /usr/src/app
           docker run --rm \
-            --mount "type=bind,source=${GITHUB_WORKSPACE}/run.template.py,target=/usr/src/app/run.template.py,readonly" \
             --mount "type=bind,source=${GITHUB_WORKSPACE}/tests,target=/tmp/tests,readonly" \
             --entrypoint python \
             twitch-channel-points-miner:validation \
