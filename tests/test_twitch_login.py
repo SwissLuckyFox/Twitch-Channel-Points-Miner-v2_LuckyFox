@@ -55,24 +55,26 @@ class TwitchLoginTests(unittest.TestCase):
         pending_response.json.return_value = {"error": "authorization_pending"}
         token_response = Mock(status_code=200)
         token_response.json.return_value = {"access_token": "test-access-token"}
-        login.send_oauth_request = Mock(
-            side_effect=[device_response, pending_response, token_response]
-        )
-        login.check_login = Mock(return_value=True)
-
-        with self.assertLogs(
+        # TwitchLogin uses __slots__, so methods must be patched on the class.
+        with patch.object(
+            TwitchLogin,
+            "send_oauth_request",
+            side_effect=[device_response, pending_response, token_response],
+        ) as send_oauth_request, patch.object(
+            TwitchLogin, "check_login", return_value=True
+        ) as check_login, self.assertLogs(
             "TwitchChannelPointsMiner.classes.TwitchLogin", level="INFO"
         ) as captured_logs, patch(
             "TwitchChannelPointsMiner.classes.TwitchLogin.time.monotonic",
-            side_effect=[0, 0, 0, 1, 1, 2],
+            return_value=0,
         ):
             result = login.login_flow()
 
         self.assertTrue(result)
         self.assertEqual(login.token, "test-access-token")
-        login.check_login.assert_called_once_with()
+        check_login.assert_called_once_with()
         self.assertEqual(sleep.call_count, 2)
-        self.assertEqual(login.send_oauth_request.call_count, 3)
+        self.assertEqual(send_oauth_request.call_count, 3)
         self.assertNotIn("private-device-code", "\n".join(captured_logs.output))
 
     def test_device_login_reports_denial_without_exposing_codes(self):
@@ -86,11 +88,11 @@ class TwitchLoginTests(unittest.TestCase):
         }
         denied_response = Mock(status_code=400)
         denied_response.json.return_value = {"error": "access_denied"}
-        login.send_oauth_request = Mock(
-            side_effect=[device_response, denied_response]
-        )
-
-        with patch(
+        with patch.object(
+            TwitchLogin,
+            "send_oauth_request",
+            side_effect=[device_response, denied_response],
+        ), patch(
             "TwitchChannelPointsMiner.classes.TwitchLogin.time.monotonic",
             return_value=0,
         ), patch("TwitchChannelPointsMiner.classes.TwitchLogin.time.sleep"):
