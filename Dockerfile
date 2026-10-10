@@ -1,12 +1,8 @@
-FROM python:3.8-slim-buster
-
-ARG BUILDX_QEMU_ENV
+FROM python:3.11-slim-bookworm
 
 WORKDIR /usr/src/app
 
 COPY ./requirements.txt ./
-
-ENV CRYPTOGRAPHY_DONT_BUILD_RUST=1
 
 RUN pip install --upgrade pip
 
@@ -23,9 +19,6 @@ RUN apt-get update \
     g++ \
     subversion \
     python3-dev \
-  && if [ "${BUILDX_QEMU_ENV}" = "true" ] && [ "$(getconf LONG_BIT)" = "32" ]; then \
-        pip install -U cryptography==3.3.2; \
-     fi \
   && pip install -r requirements.txt \
   && pip cache purge \
   && apt-get remove -y gcc rustc \
