@@ -648,6 +648,6 @@ This fork is an independent code version; changes from the original repository d
 
 The GHCR workflow builds the Docker image and runs Python compilation and configuration compatibility tests before publishing it. Pull requests targeting `master` run the same checks without publishing an image. Protect the `master` branch and require the workflow's `verify` job to pass if you want GitHub to prevent untested changes from being merged.
 
-If Twitch returns a GraphQL response without channel data during startup, the miner reports the returned GraphQL error code/message and stops instead of repeating the same failing request for every configured channel. A channel Twitch reports as nonexistent is still skipped individually.
+The `ChannelPointsContext` and `ChannelFollows` GraphQL persisted-query hashes are kept current with the maintained miner fork. If Twitch returns GraphQL errors instead of follower data, startup now reports the error rather than presenting the result as zero followers. A channel Twitch reports as nonexistent is still skipped individually.
 
 During startup, channels Twitch reports as nonexistent are skipped. If Twitch returns an incomplete GraphQL response while loading one channel's points, that channel is skipped with an error message instead of terminating initialization for all other channels.

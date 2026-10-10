@@ -6,6 +6,7 @@ from TwitchChannelPointsMiner.classes.Exceptions import (
     UnexpectedTwitchResponseException,
 )
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
+from TwitchChannelPointsMiner.constants import GQLOperations
 
 
 class ChannelPointsContextTests(unittest.TestCase):
@@ -58,6 +59,55 @@ class ChannelPointsContextTests(unittest.TestCase):
             "returned no GraphQL data.*SERVICE_UNAVAILABLE: upstream unavailable",
         ):
             self.twitch.load_channel_points_context(self.streamer)
+
+    def test_current_persisted_query_hashes_are_configured(self):
+        self.assertEqual(
+            GQLOperations.ChannelPointsContext["extensions"]["persistedQuery"][
+                "sha256Hash"
+            ],
+            "7fe050e3761eb2cf258d70ee1a21cbd76fa8cf3d7e7b12fc437e7029d446b5e3",
+        )
+        self.assertEqual(
+            GQLOperations.ChannelFollows["extensions"]["persistedQuery"][
+                "sha256Hash"
+            ],
+            "eecf815273d3d949e5cf0085cc5084cd8a1b5b7b6f7990cf43cb0beadf546907",
+        )
+
+    def test_follower_graphql_errors_are_not_reported_as_zero_followers(self):
+        self.post_gql_request.return_value = {
+            "errors": [
+                {
+                    "message": "PersistedQueryNotFound",
+                    "extensions": {"code": "PERSISTED_QUERY_NOT_FOUND"},
+                }
+            ]
+        }
+
+        with self.assertRaisesRegex(
+            UnexpectedTwitchResponseException,
+            "PERSISTED_QUERY_NOT_FOUND: PersistedQueryNotFound",
+        ):
+            self.twitch.get_followers()
+
+    def test_get_followers_returns_followers_from_valid_response(self):
+        self.post_gql_request.return_value = {
+            "data": {
+                "user": {
+                    "follows": {
+                        "edges": [
+                            {
+                                "cursor": "cursor-1",
+                                "node": {"login": "SomeFollower"},
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": False},
+                    }
+                }
+            }
+        }
+
+        self.assertEqual(self.twitch.get_followers(), ["somefollower"])
 
     def test_nonexistent_channel_raises_specific_exception(self):
         self.twitch.post_gql_request.return_value = {"data": {"community": None}}

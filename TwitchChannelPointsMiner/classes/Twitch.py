@@ -44,6 +44,30 @@ from TwitchChannelPointsMiner.utils import (
 logger = logging.getLogger(__name__)
 
 
+def _graphql_error_details(response):
+    if not isinstance(response, dict):
+        return ""
+
+    details = []
+    errors = response.get("errors", [])
+    if isinstance(errors, list):
+        for error in errors[:3]:
+            if not isinstance(error, dict):
+                continue
+            message = error.get("message")
+            extensions = error.get("extensions")
+            code = extensions.get("code") if isinstance(extensions, dict) else None
+            parts = []
+            if isinstance(code, str) and code:
+                parts.append(code)
+            if isinstance(message, str) and message:
+                parts.append(" ".join(message.split())[:300])
+            if parts:
+                details.append(": ".join(parts))
+
+    return f" GraphQL errors: {'; '.join(details)}" if details else ""
+
+
 class Twitch(object):
     __slots__ = ["cookies_file", "user_agent", "twitch_login", "running"]
 
@@ -208,16 +232,40 @@ class Twitch(object):
         while has_next is True:
             json_data["variables"]["cursor"] = last_cursor
             json_response = self.post_gql_request(json_data)
+            if not isinstance(json_response, dict) or not isinstance(
+                json_response.get("data"), dict
+            ):
+                raise UnexpectedTwitchResponseException(
+                    "Twitch returned no GraphQL data while loading your followed "
+                    f"channels.{_graphql_error_details(json_response)}"
+                )
+
             try:
                 follows_response = json_response["data"]["user"]["follows"]
-                last_cursor = None
-                for f in follows_response["edges"]:
-                    follows.append(f["node"]["login"].lower())
-                    last_cursor = f["cursor"]
+                edges = follows_response["edges"]
+                page_info = follows_response["pageInfo"]
+                has_next = page_info["hasNextPage"]
+            except (KeyError, TypeError) as error:
+                raise UnexpectedTwitchResponseException(
+                    "Twitch returned incomplete follower data while loading your "
+                    f"followed channels.{_graphql_error_details(json_response)}"
+                ) from error
 
-                has_next = follows_response["pageInfo"]["hasNextPage"]
-            except KeyError:
-                return []
+            if not isinstance(edges, list) or not isinstance(has_next, bool):
+                raise UnexpectedTwitchResponseException(
+                    "Twitch returned invalid follower data while loading your "
+                    f"followed channels.{_graphql_error_details(json_response)}"
+                )
+
+            last_cursor = None
+            for edge in edges:
+                try:
+                    follows.append(edge["node"]["login"].lower())
+                    last_cursor = edge["cursor"]
+                except (KeyError, TypeError, AttributeError) as error:
+                    raise UnexpectedTwitchResponseException(
+                        "Twitch returned an invalid followed-channel entry."
+                    ) from error
         return follows
 
     def update_raid(self, streamer, raid):
@@ -470,33 +518,9 @@ class Twitch(object):
 
         response = self.post_gql_request(json_data)
         if not isinstance(response, dict) or not isinstance(response.get("data"), dict):
-            details = []
-            errors = response.get("errors", []) if isinstance(response, dict) else []
-            if isinstance(errors, list):
-                for error in errors[:3]:
-                    if not isinstance(error, dict):
-                        continue
-                    message = error.get("message")
-                    extensions = error.get("extensions")
-                    code = (
-                        extensions.get("code")
-                        if isinstance(extensions, dict)
-                        else None
-                    )
-                    parts = []
-                    if isinstance(code, str) and code:
-                        parts.append(code)
-                    if isinstance(message, str) and message:
-                        parts.append(" ".join(message.split())[:300])
-                    if parts:
-                        details.append(": ".join(parts))
-
-            error_details = (
-                f" GraphQL errors: {'; '.join(details)}" if details else ""
-            )
             raise UnexpectedTwitchResponseException(
                 f"Twitch returned no GraphQL data while loading channel points for "
-                f"{streamer.username}.{error_details}"
+                f"{streamer.username}.{_graphql_error_details(response)}"
             )
 
         community = response["data"].get("community")
