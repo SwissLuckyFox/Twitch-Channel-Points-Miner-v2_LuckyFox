@@ -12,6 +12,7 @@ from TwitchChannelPointsMiner.constants import (
     CLIENT_VERSION,
     GQLOperations,
     URL,
+    USER_AGENTS,
 )
 
 
@@ -222,6 +223,44 @@ class ChannelPointsContextTests(unittest.TestCase):
             UnexpectedTwitchResponseException, "incomplete channel points data"
         ):
             self.twitch.load_channel_points_context(self.streamer)
+
+    @patch("TwitchChannelPointsMiner.classes.Twitch.requests.get")
+    def test_spade_url_uses_desktop_agent_and_new_settings_domain(self, get):
+        page = Mock(
+            text='<script src="https://assets.twitch.tv/config/settings.abc123.js">'
+        )
+        settings = Mock(text='{"spade_url":"https://video-edge.example/spade"}')
+        get.side_effect = [page, settings]
+        self.streamer.streamer_url = "https://www.twitch.tv/test_channel"
+
+        self.twitch.get_spade_url(self.streamer)
+
+        self.assertEqual(
+            self.streamer.stream.spade_url, "https://video-edge.example/spade"
+        )
+        self.assertEqual(
+            get.call_args_list[1].args[0],
+            "https://assets.twitch.tv/config/settings.abc123.js",
+        )
+        for call in get.call_args_list:
+            self.assertEqual(
+                call.kwargs["headers"]["User-Agent"], USER_AGENTS["Linux"]["FIREFOX"]
+            )
+            self.assertEqual(call.kwargs["timeout"], 30)
+
+    @patch("TwitchChannelPointsMiner.classes.Twitch.requests.get")
+    def test_missing_settings_script_does_not_crash(self, get):
+        get.return_value = Mock(text="<html>no settings here</html>")
+        self.streamer.streamer_url = "https://www.twitch.tv/test_channel"
+        self.streamer.stream.spade_url = None
+
+        with self.assertLogs(
+            "TwitchChannelPointsMiner.classes.Twitch", level="WARNING"
+        ):
+            self.twitch.get_spade_url(self.streamer)
+
+        self.assertIsNone(self.streamer.stream.spade_url)
+        get.assert_called_once()
 
 
 if __name__ == "__main__":

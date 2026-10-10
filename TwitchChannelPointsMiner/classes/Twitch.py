@@ -39,6 +39,7 @@ from TwitchChannelPointsMiner.constants import (
     CLIENT_VERSION,
     GQLOperations,
     URL,
+    USER_AGENTS,
 )
 from TwitchChannelPointsMiner.utils import (
     _millify,
@@ -150,16 +151,35 @@ class Twitch(object):
 
     def get_spade_url(self, streamer):
         try:
-            headers = {"User-Agent": self.user_agent}
-            main_page_request = requests.get(streamer.streamer_url, headers=headers)
-            response = main_page_request.text
-            regex_settings = "(https://static.twitchcdn.net/config/settings.*?js)"
-            settings_url = re.search(regex_settings, response).group(1)
+            # The Android TV user agent used for GraphQL gets a page without the
+            # settings script, so the channel page must be fetched as a desktop browser.
+            headers = {"User-Agent": USER_AGENTS["Linux"]["FIREFOX"]}
+            main_page_request = requests.get(
+                streamer.streamer_url, headers=headers, timeout=30
+            )
+            regex_settings = (
+                r"(https://static\.twitchcdn\.net/config/settings.*?js"
+                r"|https://assets\.twitch\.tv/config/settings.*?\.js)"
+            )
+            settings_match = re.search(regex_settings, main_page_request.text)
+            if settings_match is None:
+                logger.warning(
+                    f"Could not find Twitch settings script for {streamer.username}; "
+                    "watch-time tracking is unavailable for this stream."
+                )
+                return
 
-            settings_request = requests.get(settings_url, headers=headers)
-            response = settings_request.text
-            regex_spade = '"spade_url":"(.*?)"'
-            streamer.stream.spade_url = re.search(regex_spade, response).group(1)
+            settings_request = requests.get(
+                settings_match.group(1), headers=headers, timeout=30
+            )
+            spade_match = re.search('"spade_url":"(.*?)"', settings_request.text)
+            if spade_match is None:
+                logger.warning(
+                    f"Could not find Twitch spade URL for {streamer.username}; "
+                    "watch-time tracking is unavailable for this stream."
+                )
+                return
+            streamer.stream.spade_url = spade_match.group(1)
         except requests.exceptions.RequestException as e:
             logger.error(f"Something went wrong during extraction of 'spade_url': {e}")
 
