@@ -3,6 +3,9 @@ from datetime import datetime
 from TwitchChannelPointsMiner.classes.Settings import Settings
 from TwitchChannelPointsMiner.utils import percentage
 
+# Drop progress is reported every PROGRESS_STEP percent.
+PROGRESS_STEP = 10
+
 
 def parse_twitch_datetime(value):
     """Parse a Twitch UTC timestamp (with or without fractions) into a naive datetime."""
@@ -107,18 +110,16 @@ class Drop(object):
         updated_percentage = percentage(
             progress["currentMinutesWatched"], self.minutes_required
         )
-        quarter = round((updated_percentage / 25), 4).is_integer()
-        self.is_printable = (
-            # The new currentMinutesWatched are GT than previous
+        # Report when progress crosses a new 10% step, or when a new drop starts (first
+        # minute). A previous value of 0 otherwise means the drop was just (re)loaded, which
+        # is not reported again.
+        self.is_printable = self.is_printable or (
             progress["currentMinutesWatched"] > self.current_minutes_watched
             and (
-                # The drop is printable when we have a new updated values and:
-                #  - also the percentage It's different and  quarter is True (self.current_minutes_watched != 0 for skip boostrap phase)
-                #  - or we have watched 1 and the previous value is 0 - We are collecting a new drop :)
                 (
-                    updated_percentage > self.percentage_progress
-                    and quarter is True
-                    and self.current_minutes_watched != 0
+                    self.current_minutes_watched != 0
+                    and updated_percentage // PROGRESS_STEP
+                    > self.percentage_progress // PROGRESS_STEP
                 )
                 or (
                     progress["currentMinutesWatched"] == 1

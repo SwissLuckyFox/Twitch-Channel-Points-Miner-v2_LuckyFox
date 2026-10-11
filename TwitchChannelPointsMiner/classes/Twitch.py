@@ -993,11 +993,12 @@ class Twitch(object):
                                         and drop.is_printable is True
                                     ):
                                         drop_messages = [
-                                            f"{streamers[index]} is streaming {streamers[index].stream}",
-                                            f"Campaign: {campaign}",
-                                            f"Drop: {drop}",
+                                            f"Drop progress on {streamers[index].username}: "
+                                            f"{drop.name} ({drop.benefit or drop.name}) - "
+                                            f"{campaign.name}, {campaign.game_name() or 'unknown category'}",
                                             f"{drop.progress_bar()}",
                                         ]
+                                        drop.is_printable = False
                                         for single_line in drop_messages:
                                             logger.info(
                                                 single_line,

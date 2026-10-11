@@ -62,6 +62,35 @@ def campaign_data(drops, channels=None, account_connected=True):
 
 
 class DropFilterTests(unittest.TestCase):
+    def test_progress_is_reported_every_ten_percent(self):
+        drop = Drop(drop_data(minutes=30))
+        reported = []
+        for minute in range(1, 31):
+            drop.update(
+                {
+                    "hasPreconditionsMet": True,
+                    "currentMinutesWatched": minute,
+                    "dropInstanceID": None,
+                    "isClaimed": False,
+                }
+            )
+            if drop.is_printable:
+                reported.append(drop.percentage_progress)
+                drop.is_printable = False
+        self.assertEqual([p // 10 for p in reported], list(range(0, 11)))
+
+    def test_reloaded_drop_does_not_report_old_progress(self):
+        drop = Drop(drop_data(minutes=30))
+        drop.update(
+            {
+                "hasPreconditionsMet": True,
+                "currentMinutesWatched": 14,
+                "dropInstanceID": None,
+                "isClaimed": False,
+            }
+        )
+        self.assertFalse(drop.is_printable)
+
     def test_watch_drop_is_kept(self):
         campaign = Campaign(campaign_data([drop_data()]))
         self.assertEqual([d.id for d in campaign.drops], ["drop-1"])
