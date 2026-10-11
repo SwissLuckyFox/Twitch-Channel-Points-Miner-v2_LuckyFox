@@ -151,6 +151,42 @@ class GQLOperations:
             }
         },
     }
+    # Live streams of a game; with the DROPS_ENABLED filter only channels that
+    # currently earn drop progress are returned.
+    DirectoryPage_Game = {
+        "operationName": "DirectoryPage_Game",
+        "variables": {
+            "limit": 30,
+            "slug": None,
+            "imageWidth": 50,
+            "includeCostreaming": False,
+            "options": {
+                "broadcasterLanguages": [],
+                "freeformTags": None,
+                "includeRestricted": ["SUB_ONLY_LIVE"],
+                "recommendationsContext": {"platform": "web"},
+                "sort": "VIEWER_COUNT",
+                "systemFilters": ["DROPS_ENABLED"],
+                "tags": [],
+                "requestID": "JIRA-VXP-2397",
+            },
+            "sortTypeIsRecency": False,
+        },
+        "extensions": {
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": "86bcceb4e8b1a51256ff8eed8bd8aae4acacf80d737efe904f84f3aeadf8cafd",
+            }
+        },
+    }
+    # Newer hashes (as used by DevilXD/TwitchDropsMiner) tried when Twitch answers
+    # PersistedQueryNotFound for one of the hashes above.
+    FallbackHashes = {
+        "Inventory": "8337eb8541b314040b0edde0c09c5c7a2783ba1960aa9edfbf3bac16d0fec404",
+        "ViewerDropsDashboard": "c16bb890cc8ce7647a96ee69cd313d423a378a3dedadf630a1017cde18975feb",
+        "DropCampaignDetails": "039277bf98f3130929262cc7c6efd9c141ca3749cb6dca442fc8ead9a53f77c1",
+        "DropsHighlightService_AvailableDrops": "782dad0f032942260171d2d80a654f88bdd0c5a9dddc392e9bc92218a0f42d20",
+    }
     PersonalSections = (
         {
             "operationName": "PersonalSections",

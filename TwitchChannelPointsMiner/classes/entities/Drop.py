@@ -4,12 +4,27 @@ from TwitchChannelPointsMiner.classes.Settings import Settings
 from TwitchChannelPointsMiner.utils import percentage
 
 
+def parse_twitch_datetime(value):
+    """Parse a Twitch UTC timestamp (with or without fractions) into a naive datetime."""
+    if not isinstance(value, str):
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 class Drop(object):
     __slots__ = [
         "id",
         "name",
         "benefit",
+        "benefit_ids",
+        "benefit_types",
         "minutes_required",
+        "required_subs",
         "has_preconditions_met",
         "current_minutes_watched",
         "drop_instance_id",
@@ -25,10 +40,20 @@ class Drop(object):
     def __init__(self, dict):
         self.id = dict["id"]
         self.name = dict["name"]
+        benefits = [
+            edge["benefit"]
+            for edge in (dict.get("benefitEdges") or [])
+            if isinstance(edge, dict) and isinstance(edge.get("benefit"), dict)
+        ]
         self.benefit = ", ".join(
-            list(set([bf["benefit"]["name"] for bf in dict["benefitEdges"]]))
+            list(set([benefit.get("name", "") for benefit in benefits]))
         )
-        self.minutes_required = dict["requiredMinutesWatched"]
+        self.benefit_ids = [b["id"] for b in benefits if b.get("id")]
+        self.benefit_types = [
+            b["distributionType"] for b in benefits if b.get("distributionType")
+        ]
+        self.minutes_required = dict.get("requiredMinutesWatched") or 0
+        self.required_subs = dict.get("requiredSubs") or 0
 
         self.has_preconditions_met = None  # [True, False], None we don't know
         self.current_minutes_watched = 0
@@ -41,6 +66,35 @@ class Drop(object):
         self.end_at = datetime.strptime(dict["endAt"], "%Y-%m-%dT%H:%M:%SZ")
         self.start_at = datetime.strptime(dict["startAt"], "%Y-%m-%dT%H:%M:%SZ")
         self.dt_match = self.start_at < datetime.now() < self.end_at
+
+    @property
+    def is_watchable(self):
+        # "Subscribe to Redeem" drops need subs and have no watch-time requirement;
+        # they can't be earned by watching, so they are ignored.
+        return self.required_subs <= 0 and self.minutes_required > 0
+
+    @property
+    def is_badge_or_emote(self):
+        return any(t in ("BADGE", "EMOTE") for t in self.benefit_types)
+
+    def mark_claimed_from_benefits(self, claimed_benefits):
+        """
+        Campaigns that were already completed are no longer listed in the inventory's
+        in-progress section; their rewards show up in gameEventDrops instead.
+        claimed_benefits maps benefit id -> lastAwardedAt (naive UTC datetime).
+        """
+        if self.is_claimed or not self.benefit_ids:
+            return
+        awarded = [
+            claimed_benefits[benefit_id]
+            for benefit_id in self.benefit_ids
+            if benefit_id in claimed_benefits
+        ]
+        if awarded and all(
+            awarded_at is not None and self.start_at <= awarded_at < self.end_at
+            for awarded_at in awarded
+        ):
+            self.is_claimed = True
 
     def update(
         self,

@@ -78,6 +78,7 @@ class Streamer(object):
         "history",
         "streamer_url",
         "mutex",
+        "notify",
     ]
 
     def __init__(self, username, settings=None):
@@ -102,6 +103,8 @@ class Streamer(object):
         self.streamer_url = f"{URL}/{self.username}"
 
         self.mutex = Lock()
+        # False for channels the miner added on its own (e.g. to farm a drop).
+        self.notify = True
 
     def __repr__(self):
         return f"Streamer(username={self.username}, channel_id={self.channel_id}, channel_points={_millify(self.channel_points)})"
@@ -122,7 +125,7 @@ class Streamer(object):
         self.toggle_chat()
 
         extra = {"emoji": ":sleeping:", "event": Events.STREAMER_OFFLINE}
-        if not went_offline:
+        if not went_offline or not self.notify:
             # Already offline (e.g. the initial check at startup): log only.
             extra["skip_telegram"] = True
             extra["skip_discord"] = True
@@ -136,13 +139,11 @@ class Streamer(object):
 
         self.toggle_chat()
 
-        logger.info(
-            f"{self} is Online!",
-            extra={
-                "emoji": ":partying_face:",
-                "event": Events.STREAMER_ONLINE,
-            },
-        )
+        extra = {"emoji": ":partying_face:", "event": Events.STREAMER_ONLINE}
+        if not self.notify:
+            extra["skip_telegram"] = True
+            extra["skip_discord"] = True
+        logger.info(f"{self} is Online!", extra=extra)
 
     def print_history(self):
         return ", ".join(
@@ -166,11 +167,16 @@ class Streamer(object):
         return self.stream_up == 0 or ((time.time() - self.stream_up) > 120)
 
     def drops_condition(self):
+        # Twitch no longer sets the "Drops Enabled" stream tag, so rely on the
+        # campaigns matched to this stream that still have unclaimed watch drops.
         return (
             self.settings.claim_drops is True
             and self.is_online is True
-            and self.stream.drops_tags is True
-            and self.stream.campaigns_ids != []
+            and any(
+                drop.is_claimed is False
+                for campaign in self.stream.campaigns
+                for drop in campaign.drops
+            )
         )
 
     def viewer_has_points_multiplier(self):

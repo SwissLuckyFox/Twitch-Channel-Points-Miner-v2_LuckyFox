@@ -16,7 +16,7 @@ from secrets import token_hex
 import requests
 
 from TwitchChannelPointsMiner.classes.entities.Campaign import Campaign
-from TwitchChannelPointsMiner.classes.entities.Drop import Drop
+from TwitchChannelPointsMiner.classes.entities.Drop import Drop, parse_twitch_datetime
 from TwitchChannelPointsMiner.classes.entities.Streamer import (
     Streamer,
     StreamerSettings,
@@ -49,6 +49,11 @@ from TwitchChannelPointsMiner.utils import (
 
 logger = logging.getLogger(__name__)
 
+# Game-directory lookup for drop campaigns that accept any participating channel.
+DIRECTORY_SEARCH_INTERVAL = 10 * 60
+DIRECTORY_SEARCH_LIMIT = 10
+DIRECTORY_CHANNELS_PER_CAMPAIGN = 3
+
 
 def _graphql_error_details(response):
     if not isinstance(response, dict):
@@ -72,6 +77,68 @@ def _graphql_error_details(response):
                 details.append(": ".join(parts))
 
     return f" GraphQL errors: {'; '.join(details)}" if details else ""
+
+
+# Operation name -> persisted query hash that replaced a stale primary hash.
+_preferred_hashes = {}
+
+
+def _persisted_query_not_found(response):
+    if not isinstance(response, dict):
+        return False
+    errors = response.get("errors")
+    if not isinstance(errors, list):
+        return False
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        extensions = error.get("extensions")
+        code = extensions.get("code") if isinstance(extensions, dict) else None
+        if (
+            error.get("message") == "PersistedQueryNotFound"
+            or code == "PERSISTED_QUERY_NOT_FOUND"
+        ):
+            return True
+    return False
+
+
+def _apply_hashes(json_data, hashes):
+    """Return json_data with persisted query hashes replaced from `hashes` (copy if changed)."""
+    operations = json_data if isinstance(json_data, list) else [json_data]
+    if not any(
+        isinstance(operation, dict) and operation.get("operationName") in hashes
+        for operation in operations
+    ):
+        return json_data
+
+    patched = copy.deepcopy(json_data)
+    for operation in patched if isinstance(patched, list) else [patched]:
+        if not isinstance(operation, dict):
+            continue
+        new_hash = hashes.get(operation.get("operationName"))
+        extensions = operation.get("extensions")
+        persisted = (
+            extensions.get("persistedQuery") if isinstance(extensions, dict) else None
+        )
+        if new_hash and isinstance(persisted, dict):
+            persisted["sha256Hash"] = new_hash
+    return patched
+
+
+def _with_fallback_hashes(json_data, response):
+    """Return a retry payload using fallback hashes, or None when no retry makes sense."""
+    responses = response if isinstance(response, list) else [response]
+    if not any(_persisted_query_not_found(r) for r in responses):
+        return None
+    patched = _apply_hashes(json_data, GQLOperations.FallbackHashes)
+    return None if patched == json_data else patched
+
+
+def _game_slug(name):
+    # Same slug rules Twitch uses for directory URLs, e.g. "Alien: Isolation" -> "alien-isolation".
+    slug = re.sub(r"'", "", (name or "").lower())
+    slug = re.sub(r"\W+", "-", slug)
+    return re.sub(r"-{2,}", "-", slug.strip("-"))
 
 
 class Twitch(object):
@@ -363,6 +430,30 @@ class Twitch(object):
             self.__chuncked_sleep(random_sleep * 60, chunk_size=chunk_size)
 
     def post_gql_request(self, json_data):
+        json_data = _apply_hashes(json_data, _preferred_hashes)
+        response = self.__send_gql_request(json_data)
+        fallback_data = _with_fallback_hashes(json_data, response)
+        if fallback_data is not None:
+            logger.debug("Retrying GraphQL request with fallback persisted query hash")
+            fallback_response = self.__send_gql_request(fallback_data)
+            responses = (
+                fallback_response
+                if isinstance(fallback_response, list)
+                else [fallback_response]
+            )
+            if fallback_response not in [{}, None] and not any(
+                _persisted_query_not_found(r) for r in responses
+            ):
+                for operation in (
+                    fallback_data if isinstance(fallback_data, list) else [fallback_data]
+                ):
+                    name = operation.get("operationName")
+                    if name in GQLOperations.FallbackHashes:
+                        _preferred_hashes[name] = GQLOperations.FallbackHashes[name]
+                return fallback_response
+        return response
+
+    def __send_gql_request(self, json_data):
         try:
             response = requests.post(
                 GQLOperations.url,
@@ -412,8 +503,30 @@ class Twitch(object):
         self.client_version = match.group(1)
         return self.client_version
 
+    def __log_drop_watching(self, previous, current):
+        if current is previous:
+            return current
+        if current is not None:
+            campaigns = ", ".join(
+                f"{campaign.name} ({campaign.game_name()})"
+                for campaign in current.stream.campaigns
+                if campaign.drops
+            )
+            logger.info(
+                f"Watching {current.username} to earn drop: {campaigns}",
+                extra={"emoji": ":gift:", "event": Events.DROP_STATUS},
+            )
+        elif previous is not None:
+            logger.info(
+                "No drop to farm at the moment, back to the normal watch routine",
+                extra={"emoji": ":gift:", "event": Events.DROP_STATUS},
+            )
+        return current
+
     def send_minute_watched_events(self, streamers, priority, chunk_size=3):
+        last_drop_streamer = None
         while self.running:
+            drop_streamer = None
             try:
                 streamers_index = [
                     i
@@ -486,14 +599,16 @@ class Twitch(object):
                                     break
 
                     elif prior == Priority.DROPS and len(streamers_watching) < 2:
+                        # Drop progress is only earned on one channel at a time, so a
+                        # single slot is enough; the other one keeps the normal routine.
                         for index in streamers_index:
                             if (
                                 index not in streamers_watching
                                 and streamers[index].drops_condition() is True
                             ):
                                 streamers_watching.append(index)
-                                if len(streamers_watching) == 2:
-                                    break
+                                drop_streamer = streamers[index]
+                                break
 
                     elif prior == Priority.SUBSCRIBED and len(streamers_watching) < 2:
                         streamers_with_multiplier = [
@@ -514,6 +629,13 @@ class Twitch(object):
                 We take the first two streamers from the list as they have the highest priority (based on order or WatchStreak).
                 """
                 streamers_watching = streamers_watching[:2]
+                if drop_streamer is not None and not any(
+                    streamers[index] is drop_streamer for index in streamers_watching
+                ):
+                    drop_streamer = None
+                last_drop_streamer = self.__log_drop_watching(
+                    last_drop_streamer, drop_streamer
+                )
 
                 for index in streamers_watching:
                     next_iteration = time.time() + 60 / len(streamers_watching)
@@ -793,23 +915,28 @@ class Twitch(object):
         # We need the inventory only for get the real updated value/progress
         # Get data from inventory and sync current status with streamers.campaigns
         inventory = self.__get_inventory()
-        if inventory not in [None, {}] and inventory["dropCampaignsInProgress"] not in [
-            None,
-            {},
-        ]:
-            # Iterate all campaigns from dashboard (only active, with working drops)
-            # In this array we have also the campaigns never started from us (not in nventory)
-            for i in range(len(campaigns)):
-                campaigns[i].clear_drops()  # Remove all the claimed drops
-                # Iterate all campaigns currently in progress from out inventory
-                for progress in inventory["dropCampaignsInProgress"]:
-                    if progress["id"] == campaigns[i].id:
-                        campaigns[i].in_inventory = True
-                        campaigns[i].sync_drops(
-                            progress["timeBasedDrops"], self.claim_drop
-                        )
-                        campaigns[i].clear_drops()  # Remove all the claimed drops
-                        break
+        if not isinstance(inventory, dict):
+            inventory = {}
+        in_progress = [
+            c for c in (inventory.get("dropCampaignsInProgress") or []) if isinstance(c, dict)
+        ]
+        # Rewards of already completed campaigns are only listed here (benefit id -> award time).
+        claimed_benefits = {
+            event["id"]: parse_twitch_datetime(event.get("lastAwardedAt"))
+            for event in (inventory.get("gameEventDrops") or [])
+            if isinstance(event, dict) and event.get("id")
+        }
+
+        # Iterate all campaigns from dashboard (only active, with working drops)
+        # In this array we have also the campaigns never started from us (not in inventory)
+        for campaign in campaigns:
+            progress = next((p for p in in_progress if p.get("id") == campaign.id), None)
+            if progress is not None:
+                campaign.in_inventory = True
+                campaign.sync_drops(progress.get("timeBasedDrops") or [], self.claim_drop)
+            else:
+                campaign.mark_claimed_from_benefits(claimed_benefits)
+            campaign.clear_drops()  # Remove all the claimed drops
         return campaigns
 
     def claim_drop(self, drop):
@@ -851,10 +978,103 @@ class Twitch(object):
                             drop.is_claimed = self.claim_drop(drop)
                             time.sleep(random.uniform(5, 10))
 
+    def get_drops_enabled_channels(self, game, limit=DIRECTORY_SEARCH_LIMIT):
+        """Return [(channel_id, login)] of live, drops-enabled streams for a campaign game."""
+        if not isinstance(game, dict):
+            return []
+        slug = game.get("slug") or _game_slug(
+            game.get("name") or game.get("displayName")
+        )
+        if not slug:
+            return []
+
+        json_data = copy.deepcopy(GQLOperations.DirectoryPage_Game)
+        json_data["variables"]["slug"] = slug
+        json_data["variables"]["limit"] = limit
+        response = self.post_gql_request(json_data)
+        try:
+            edges = response["data"]["game"]["streams"]["edges"] or []
+        except (KeyError, TypeError):
+            logger.debug(
+                f"No directory streams for game '{slug}'.{_graphql_error_details(response)}"
+            )
+            return []
+
+        channels = []
+        for edge in edges:
+            node = edge.get("node") if isinstance(edge, dict) else None
+            broadcaster = node.get("broadcaster") if isinstance(node, dict) else None
+            if (
+                isinstance(broadcaster, dict)
+                and broadcaster.get("id")
+                and broadcaster.get("login")
+            ):
+                channels.append(
+                    (str(broadcaster["id"]), broadcaster["login"].lower())
+                )
+        return channels
+
+    def __add_drop_streamer(self, streamers, discovered_streamers, channel_id, login):
+        streamer = Streamer(login)
+        streamer.channel_id = channel_id
+        streamer.notify = False
+        streamer.settings = StreamerSettings(
+            make_predictions=False,
+            follow_raid=False,
+            claim_drops=True,
+            watch_streak=False,
+            chat=ChatPresence.NEVER,
+        )
+        streamer.settings.default()
+        streamer.settings.bet.default()
+        discovered_streamers[channel_id] = streamer
+        streamers.append(streamer)
+        logger.info(
+            f"Discovered {login} for an unclaimed Twitch drop",
+            extra={"emoji": ":gift:"},
+        )
+        return streamer
+
+    def __discover_directory_channels(
+        self, campaign, streamers, discovered_streamers, directory_channels
+    ):
+        found = self.get_drops_enabled_channels(campaign.game)
+        if not found:
+            logger.debug(
+                f"No live drops-enabled channel found for campaign {campaign.name}"
+            )
+            return
+
+        known = {streamer.channel_id: streamer for streamer in streamers}
+        selected = []
+        for channel_id, login in found:
+            # Prefer channels the user already follows/mines, then fill up with new ones.
+            if channel_id in known and channel_id not in discovered_streamers:
+                selected.insert(0, (channel_id, login))
+            else:
+                selected.append((channel_id, login))
+        selected = selected[:DIRECTORY_CHANNELS_PER_CAMPAIGN]
+
+        directory_channels[campaign.id] = {channel_id for channel_id, _ in selected}
+        for channel_id, login in selected:
+            if channel_id not in known:
+                self.__add_drop_streamer(
+                    streamers, discovered_streamers, channel_id, login
+                )
+
+        logger.info(
+            f"Looking for drop '{campaign.name}' ({campaign.game_name()}) on: "
+            + ", ".join(login for _, login in selected),
+            extra={"emoji": ":gift:"},
+        )
+
     def sync_campaigns(self, streamers, chunk_size=3):
         campaigns_update = 0
         campaigns = []
         discovered_streamers = {}
+        # campaign id -> channel ids found in the game directory for that campaign
+        directory_channels = {}
+        directory_checked = {}
         while self.running:
             try:
                 # Get update from dashboard each 60minutes
@@ -876,17 +1096,35 @@ class Twitch(object):
                         if campaign.dt_match is True:
                             # Remove all the drops already claimed or with dt not matching
                             campaign.clear_drops()
-                            if campaign.drops != []:
-                                campaigns.append(campaign)
+                            if campaign.drops == []:
+                                continue
+                            if not campaign.is_eligible:
+                                logger.debug(
+                                    f"Skipping drop campaign {campaign.name}: "
+                                    "game account is not linked"
+                                )
+                                continue
+                            campaigns.append(campaign)
 
                 # Divide et impera :)
                 campaigns = self.__sync_campaigns(campaigns)
+                active_campaigns = [c for c in campaigns if c.drops]
+                active_ids = {c.id for c in active_campaigns}
+
+                # Forget directory channels of campaigns that are done.
+                for campaign_id in list(directory_channels):
+                    if campaign_id not in active_ids:
+                        del directory_channels[campaign_id]
 
                 campaign_channels = {
                     channel_id
-                    for campaign in campaigns
-                    if campaign.drops
+                    for campaign in active_campaigns
                     for channel_id in campaign.channels
+                }
+                needed_channels = campaign_channels | {
+                    channel_id
+                    for channels in directory_channels.values()
+                    for channel_id in channels
                 }
                 known_channel_ids = {
                     streamer.channel_id for streamer in streamers
@@ -901,36 +1139,23 @@ class Twitch(object):
                 )
 
                 for channel_id, login in channel_logins.items():
-                    streamer = Streamer(login)
-                    streamer.channel_id = channel_id
-                    streamer.settings = StreamerSettings(
-                        make_predictions=False,
-                        follow_raid=False,
-                        claim_drops=True,
-                        watch_streak=False,
-                        chat=ChatPresence.NEVER,
-                    )
-                    streamer.settings.default()
-                    streamer.settings.bet.default()
-                    discovered_streamers[channel_id] = streamer
-                    streamers.append(streamer)
-                    logger.info(
-                        f"Discovered {login} for an unclaimed Twitch drop",
-                        extra={"emoji": ":gift:"},
+                    self.__add_drop_streamer(
+                        streamers, discovered_streamers, channel_id, login
                     )
 
                 for channel_id in list(discovered_streamers):
-                    if channel_id not in campaign_channels:
+                    if channel_id not in needed_channels:
                         streamer = discovered_streamers[channel_id]
                         streamer.stream.campaigns = []
                         if streamer.is_online:
                             streamer.set_offline()
 
-                for streamer in discovered_streamers.values():
-                    self.check_streamer_online(streamer)
+                for channel_id, streamer in discovered_streamers.items():
+                    if channel_id in needed_channels:
+                        self.check_streamer_online(streamer)
 
                 # Match active campaigns to live channels, including newly discovered
-                # channels listed in a campaign's allow-list.
+                # channels listed in a campaign's allow-list or found in the game directory.
                 for streamer in streamers:
                     if (
                         streamer.settings.claim_drops is True
@@ -939,20 +1164,43 @@ class Twitch(object):
                         game_id = streamer.stream.game_id()
                         eligible_campaigns = [
                             campaign
-                            for campaign in campaigns
+                            for campaign in active_campaigns
                             if game_id is not None
-                            and campaign.drops
                             and isinstance(campaign.game, dict)
                             and campaign.game.get("id") == game_id
                             and (
                                 campaign.id in streamer.stream.campaigns_ids
                                 or streamer.channel_id in campaign.channels
+                                or streamer.channel_id
+                                in directory_channels.get(campaign.id, ())
                             )
                         ]
                         streamer.stream.campaigns = eligible_campaigns
                         streamer.stream.campaigns_ids = [
                             campaign.id for campaign in eligible_campaigns
                         ]
+
+                # Campaigns open to every channel of a game ("watch any participating
+                # live channel"): if none of the known channels can progress them, look
+                # for live drops-enabled channels in the game directory.
+                covered_ids = {
+                    campaign.id
+                    for streamer in streamers
+                    if streamer.is_online is True
+                    for campaign in streamer.stream.campaigns
+                }
+                for campaign in active_campaigns:
+                    if (
+                        not campaign.any_channel
+                        or campaign.id in covered_ids
+                        or time.time() - directory_checked.get(campaign.id, 0)
+                        < DIRECTORY_SEARCH_INTERVAL
+                    ):
+                        continue
+                    directory_checked[campaign.id] = time.time()
+                    self.__discover_directory_channels(
+                        campaign, streamers, discovered_streamers, directory_channels
+                    )
 
             except (
                 ValueError,
