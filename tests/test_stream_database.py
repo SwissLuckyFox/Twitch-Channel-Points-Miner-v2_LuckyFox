@@ -189,6 +189,31 @@ class BadgeFallbackCampaignTests(unittest.TestCase):
         )
         self.assertTrue(failed.startswith("Stream Database unavailable; "))
 
+    def test_owned_badges_are_read_from_twitch(self):
+        from unittest.mock import patch
+
+        from TwitchChannelPointsMiner.classes.Twitch import Twitch
+
+        twitch = object.__new__(Twitch)
+        response = {
+            "data": {
+                "currentUser": {
+                    "availableBadges": [
+                        {"setID": "d20", "title": "d20"},
+                        {"setID": "Gold-Stamp", "title": "Gold Stamp"},
+                        None,
+                    ]
+                }
+            }
+        }
+        with patch.object(Twitch, "post_gql_request", return_value=response) as post:
+            self.assertEqual(
+                twitch.get_owned_badges(), ({"d20", "gold-stamp"}, {"d20", "gold stamp"})
+            )
+        self.assertIn("availableBadges", post.call_args.args[0]["query"])
+        with patch.object(Twitch, "post_gql_request", return_value={"errors": [{}]}):
+            self.assertIsNone(twitch.get_owned_badges())
+
 
 if __name__ == "__main__":
     unittest.main()

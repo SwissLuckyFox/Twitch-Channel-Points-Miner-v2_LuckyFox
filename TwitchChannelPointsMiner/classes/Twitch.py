@@ -1480,6 +1480,36 @@ class Twitch(object):
             logger.debug(f"Stream Database: {badge!r}")
         return badges, None
 
+    def get_owned_badges(self):
+        """
+        (set IDs, titles) of the global chat badges the account owns, both lowercased,
+        or None when Twitch did not answer.
+        """
+        response = self.post_gql_request(
+            {
+                "operationName": "AvailableBadges",
+                "query": "query AvailableBadges { currentUser { availableBadges { setID title } } }",
+                "variables": {},
+            }
+        )
+        try:
+            owned = response["data"]["currentUser"]["availableBadges"]
+        except (KeyError, TypeError):
+            logger.debug(
+                "Drop scan: could not read the account's badges.%s",
+                _graphql_error_details(response),
+            )
+            return None
+        set_ids, titles = set(), set()
+        for badge in owned or []:
+            if not isinstance(badge, dict):
+                continue
+            if badge.get("setID"):
+                set_ids.add(str(badge["setID"]).strip().lower())
+            if badge.get("title"):
+                titles.add(str(badge["title"]).strip().lower())
+        return set_ids, titles
+
     def __badge_fallback_campaigns(self, badges, campaigns_data, first_offered):
         """Campaigns for running badges whose categories Twitch did not confirm."""
         covered_games = {
@@ -1630,10 +1660,17 @@ class Twitch(object):
                         for event in (inventory.get("gameEventDrops") or [])
                         if isinstance(event, dict) and event.get("name")
                     }
+                    owned_sets = set()
+                    if badges:
+                        owned = self.get_owned_badges()
+                        if owned is not None:
+                            owned_sets, owned_titles = owned
+                            earned_names |= owned_titles
                     open_badges = [
                         badge
                         for badge in badges
-                        if str(badge.title).strip().lower() not in earned_names
+                        if str(badge.set_id).strip().lower() not in owned_sets
+                        and str(badge.title).strip().lower() not in earned_names
                     ]
                     known = {c["id"]: c for c in in_progress}
                     known.update(
