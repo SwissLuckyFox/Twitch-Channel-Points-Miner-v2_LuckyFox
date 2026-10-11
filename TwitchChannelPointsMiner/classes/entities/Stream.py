@@ -83,6 +83,9 @@ class Stream(object):
     def game_name(self):
         return None if self.game in [{}, None] else self.game["name"]
 
+    def game_id(self):
+        return self.game.get("id") if isinstance(self.game, dict) else None
+
     def update_required(self):
         return self.__last_update == 0 or self.update_elapsed() >= 120
 

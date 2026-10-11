@@ -264,7 +264,7 @@ class Twitch(object):
                 if not isinstance(response, dict):
                     logger.warning("Invalid user response while resolving a drop channel ID")
                     continue
-                user = response.get("data", {}).get("user")
+                user = (response.get("data") or {}).get("user")
                 if (
                     isinstance(user, dict)
                     and user.get("id")
@@ -907,9 +907,7 @@ class Twitch(object):
                         make_predictions=False,
                         follow_raid=False,
                         claim_drops=True,
-                        claim_moments=False,
                         watch_streak=False,
-                        community_goals=False,
                         chat=ChatPresence.NEVER,
                     )
                     streamer.settings.default()
@@ -942,8 +940,9 @@ class Twitch(object):
                         eligible_campaigns = [
                             campaign
                             for campaign in campaigns
-                            if campaign.drops
-                            and campaign.game is not None
+                            if game_id is not None
+                            and campaign.drops
+                            and isinstance(campaign.game, dict)
                             and campaign.game.get("id") == game_id
                             and (
                                 campaign.id in streamer.stream.campaigns_ids
@@ -963,5 +962,8 @@ class Twitch(object):
             ) as e:
                 logger.error(f"Error while syncing inventory: {e}")
                 self.__check_connection_handler(chunk_size)
+            except Exception:
+                # Keep the drops thread alive; it retries on the next iteration.
+                logger.error("Unexpected error while syncing inventory", exc_info=True)
 
             self.__chuncked_sleep(60, chunk_size=chunk_size)

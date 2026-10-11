@@ -9,7 +9,13 @@ logger = logging.getLogger(__name__)
 
 
 class Telegram(object):
-    __slots__ = ["chat_id", "telegram_api", "events", "disable_notification"]
+    __slots__ = [
+        "chat_id",
+        "telegram_api",
+        "events",
+        "disable_notification",
+        "last_error",
+    ]
 
     def __init__(
         self, chat_id: int, token: str, events: list, disable_notification: bool = False
@@ -18,6 +24,15 @@ class Telegram(object):
         self.telegram_api = f"https://api.telegram.org/bot{token}/sendMessage"
         self.events = [str(e) for e in events]
         self.disable_notification = disable_notification
+        self.last_error = None
+
+    def _warn(self, message: str) -> None:
+        # Log each distinct failure once instead of once per notification.
+        if message != self.last_error:
+            self.last_error = message
+            logger.warning(message)
+        else:
+            logger.debug(message)
 
     def send(self, message: str, event: Events) -> None:
         if str(event) in self.events:
@@ -35,12 +50,14 @@ class Telegram(object):
                 response.raise_for_status()
                 result = response.json()
                 if not isinstance(result, dict) or not result.get("ok", False):
-                    logger.warning(
-                        "Telegram rejected a notification: %s",
+                    description = (
                         result.get("description", "unexpected API response")
                         if isinstance(result, dict)
-                        else "unexpected API response",
+                        else "unexpected API response"
                     )
+                    self._warn(f"Telegram rejected a notification: {description}")
+                else:
+                    self.last_error = None
             except requests.exceptions.HTTPError as error:
                 # Never log the request URL: it contains the bot token.
                 response = error.response
@@ -53,13 +70,11 @@ class Telegram(object):
                         )
                     except (ValueError, AttributeError):
                         pass
-                logger.warning(
-                    "Could not send Telegram notification (HTTP %s: %s).",
-                    status,
-                    description,
+                self._warn(
+                    f"Could not send Telegram notification (HTTP {status}: "
+                    f"{description})."
                 )
             except (requests.exceptions.RequestException, ValueError) as error:
-                logger.warning(
-                    "Could not send Telegram notification (%s).",
-                    type(error).__name__,
+                self._warn(
+                    f"Could not send Telegram notification ({type(error).__name__})."
                 )

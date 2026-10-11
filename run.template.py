@@ -55,6 +55,12 @@ def optional_telegram():
     if not re.fullmatch(r"\d+:[A-Za-z0-9_-]{20,}", token):
         logger.warning("Telegram disabled: TELEGRAM_BOT_TOKEN has an invalid format.")
         return None
+    if chat_id == token.split(":", 1)[0]:
+        logger.warning(
+            "Telegram disabled: TELEGRAM_CHAT_ID is the bot's own ID (the number "
+            "before ':' in the token). Use your user or group chat ID instead."
+        )
+        return None
 
     return Telegram(
         chat_id=int(chat_id),

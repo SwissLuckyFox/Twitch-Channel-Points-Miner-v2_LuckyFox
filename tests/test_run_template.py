@@ -75,6 +75,20 @@ class RunTemplateTests(unittest.TestCase):
         self.assertIsNotNone(settings.telegram)
         self.assertIsNotNone(settings.discord)
 
+    def test_telegram_chat_id_equal_to_bot_id_is_rejected(self):
+        with patch.dict(
+            os.environ,
+            {
+                "TWITCH_USERNAME": "ci-validation-user",
+                "TELEGRAM_CHAT_ID": "123456",
+                "TELEGRAM_BOT_TOKEN": "123456:abcdefghijklmnopqrstuvwxyz",
+            },
+            clear=True,
+        ):
+            settings = run_template.build_miner_kwargs()["logger_settings"]
+
+        self.assertIsNone(settings.telegram)
+
     def test_streamers_use_fork_settings(self):
         with tempfile.TemporaryDirectory() as config_directory:
             streamers_file = Path(config_directory) / "streamers.txt"

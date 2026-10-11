@@ -37,6 +37,24 @@ class TelegramTests(unittest.TestCase):
         self.assertNotIn("secret-bot-token", output)
 
     @patch("TwitchChannelPointsMiner.classes.Telegram.requests.post")
+    def test_repeated_identical_errors_are_logged_once(self, post):
+        response = Mock(status_code=400)
+        response.json.return_value = {"description": "Bad Request: chat not found"}
+        response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            response=response
+        )
+        post.return_value = response
+
+        with self.assertLogs(
+            "TwitchChannelPointsMiner.classes.Telegram", level="DEBUG"
+        ) as logs:
+            for _ in range(3):
+                self.telegram.send("hello", Events.GAIN_FOR_WATCH)
+
+        warnings = [r for r in logs.records if r.levelname == "WARNING"]
+        self.assertEqual(len(warnings), 1)
+
+    @patch("TwitchChannelPointsMiner.classes.Telegram.requests.post")
     def test_unsubscribed_event_is_not_sent(self, post):
         self.telegram.send("hello", Events.BET_WIN)
         post.assert_not_called()
