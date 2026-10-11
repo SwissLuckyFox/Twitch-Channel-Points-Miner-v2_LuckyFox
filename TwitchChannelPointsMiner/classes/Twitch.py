@@ -34,6 +34,7 @@ from TwitchChannelPointsMiner.classes.Settings import (
     Settings,
 )
 from TwitchChannelPointsMiner.classes.TwitchLogin import TwitchLogin
+from TwitchChannelPointsMiner.classes.StreamDatabase import fetch_watch_badges
 from TwitchChannelPointsMiner.constants import (
     CLIENT_ID,
     CLIENT_VERSION,
@@ -53,6 +54,11 @@ logger = logging.getLogger(__name__)
 DIRECTORY_SEARCH_INTERVAL = 10 * 60
 DIRECTORY_SEARCH_LIMIT = 10
 DIRECTORY_CHANNELS_PER_CAMPAIGN = 3
+# Stream Database badges Twitch never confirms (no progress in the inventory) are
+# given up after this long, so the miner doesn't watch a category forever.
+STREAMDB_FALLBACK_SECONDS = 12 * 60 * 60
+STREAMDB_CHANNELS_PER_BADGE = 10
+STREAMDB_PREFIX = "streamdb:"
 
 
 def _graphql_error_details(response):
@@ -231,6 +237,59 @@ def _campaign_from_available_drops(data, channel_entry, linked=True):
     }
 
 
+def _campaigns_from_badge(badge):
+    """
+    Campaign data for a running Stream Database watch badge, one per category, used when
+    Twitch's own AvailableDrops did not confirm a campaign in that category. Watching starts
+    the real campaign in the inventory, which then takes over.
+    """
+    if not badge.games or badge.start_at is None or badge.end_at is None:
+        return []
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    start, end = badge.start_at.strftime(fmt), badge.end_at.strftime(fmt)
+    allow = [{"id": channel_id, "name": login} for channel_id, login in badge.channels]
+    result = []
+    for game in badge.games:
+        campaign_id = f"{STREAMDB_PREFIX}{badge.set_id}:{game['id']}"
+        result.append(
+            {
+                "id": campaign_id,
+                "name": badge.title,
+                "game": {
+                    "id": game["id"],
+                    "name": game["name"],
+                    "displayName": game["name"],
+                    "slug": game.get("slug"),
+                },
+                "status": "ACTIVE",
+                "self": {"isAccountConnected": True},
+                "startAt": start,
+                "endAt": end,
+                "allow": {"channels": allow, "isEnabled": True} if allow else None,
+                "timeBasedDrops": [
+                    {
+                        "id": campaign_id,
+                        "name": badge.title,
+                        "startAt": start,
+                        "endAt": end,
+                        "requiredMinutesWatched": badge.minutes,
+                        "requiredSubs": 0,
+                        "benefitEdges": [
+                            {
+                                "benefit": {
+                                    "id": campaign_id,
+                                    "name": badge.title,
+                                    "distributionType": "BADGE",
+                                }
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    return result
+
+
 def _scan_sources(stats):
     """Where the hourly scan looked, e.g. '1 started in your inventory; 12 live channel(s) checked in Rust'."""
     if "probed_channels" not in stats:
@@ -241,7 +300,16 @@ def _scan_sources(stats):
         text += " in " + ", ".join(categories[:5])
         if len(categories) > 5:
             text += f" +{len(categories) - 5} more"
-    return f"{stats.get('in_progress', 0)} started in your inventory; {text}"
+    sources = f"{stats.get('in_progress', 0)} started in your inventory; {text}"
+    if "streamdb" in stats:
+        if stats.get("streamdb_error"):
+            streamdb = "Stream Database unavailable"
+        else:
+            streamdb = f"Stream Database: {stats['streamdb']} running watch badge(s)"
+            if stats.get("streamdb_earned"):
+                streamdb += f", {stats['streamdb_earned']} already earned"
+        sources = f"{streamdb}; {sources}"
+    return sources
 
 
 WATCH_REASONS = {
@@ -349,8 +417,13 @@ def describe_drop_scan(active_campaigns, stats):
             if campaign.any_channel
             else f"{len(campaign.channels)} participating channel(s)"
         )
+        source = (
+            " (from Stream Database)"
+            if str(campaign.id).startswith(STREAMDB_PREFIX)
+            else ""
+        )
         lines.append(
-            f"- {campaign.name} | Category: {campaign.game_name() or 'unknown'} "
+            f"- {campaign.name}{source} | Category: {campaign.game_name() or 'unknown'} "
             f"| Rewards: {rewards} | Watch on: {where}"
         )
     lines.append("Checking which participating channels are live...")
@@ -1393,22 +1466,74 @@ class Twitch(object):
                 result[channel_id] = [c for c in campaigns or [] if isinstance(c, dict)]
         return result
 
-    def __discover_campaigns(self, streamers, known_campaigns):
+    def __get_stream_database_badges(self):
+        """(badges, error text) - an unreachable or changed site must not stop the scan."""
+        try:
+            badges = fetch_watch_badges()
+        except (requests.exceptions.RequestException, ValueError, KeyError, TypeError) as error:
+            logger.warning(
+                f"Drop scan: Stream Database is unavailable ({error!r}); "
+                "using live channels and the inventory only"
+            )
+            return [], str(error) or error.__class__.__name__
+        for badge in badges:
+            logger.debug(f"Stream Database: {badge!r}")
+        return badges, None
+
+    def __badge_fallback_campaigns(self, badges, campaigns_data, first_offered):
+        """Campaigns for running badges whose categories Twitch did not confirm."""
+        covered_games = {
+            str(data["game"]["id"])
+            for data in campaigns_data
+            if isinstance(data.get("game"), dict) and data["game"].get("id")
+        }
+        now = time.time()
+        result = []
+        for badge in badges:
+            if not badge.is_running():
+                continue
+            for data in _campaigns_from_badge(badge):
+                if data["game"]["id"] in covered_games:
+                    continue
+                first = first_offered.setdefault(data["id"], now)
+                if now - first > STREAMDB_FALLBACK_SECONDS:
+                    logger.debug(
+                        f"Stream Database badge {badge.title} ({data['game']['name']}): "
+                        "Twitch never showed progress, giving up"
+                    )
+                    continue
+                result.append(data)
+        return result
+
+    def __discover_campaigns(self, streamers, known_campaigns, badges=()):
         """
         Twitch no longer gives app clients the campaign list (ViewerDropsDashboard and
         DropCampaignDetails return null since ~Sep 2026), but the per-channel AvailableDrops
-        query still works. Probe the user's live channels plus live drops-enabled channels
-        of the relevant categories (games of known campaigns and of the user's live streams
-        with drops enabled) for campaigns that are not known yet.
+        query still works. Probe channels for campaigns that are not known yet:
+        the channels/categories of Stream Database watch badges first, then the user's live
+        channels and live drops-enabled channels of the relevant categories (games of known
+        campaigns and of the user's live streams with drops enabled).
         Returns (campaign data list, number of probed channels, category names).
         """
         channels = {}
         games = {}
+        # Channels named by a badge or followed by the user are always kept in a campaign's
+        # allow-list; directory channels are capped.
+        preferred_channels = set()
+        for badge in badges:
+            for game in badge.games:
+                games.setdefault(
+                    game["id"],
+                    {"id": game["id"], "name": game["name"], "displayName": game["name"],
+                     "slug": game.get("slug")},
+                )
+            for channel_id, login in badge.channels[:STREAMDB_CHANNELS_PER_BADGE]:
+                channels.setdefault(channel_id, login)
+                preferred_channels.add(channel_id)
         for data in known_campaigns:
             game = data.get("game")
             if isinstance(game, dict) and game.get("id"):
-                games[str(game["id"])] = game
-        own_channels = set()
+                games.setdefault(str(game["id"]), game)
         for streamer in streamers:
             if (
                 streamer.is_online is True
@@ -1418,7 +1543,7 @@ class Twitch(object):
             ):
                 channel_id = str(streamer.channel_id)
                 channels[channel_id] = streamer.username
-                own_channels.add(channel_id)
+                preferred_channels.add(channel_id)
                 game = streamer.stream.game
                 if streamer.stream.drops_tags and isinstance(game, dict) and game.get("id"):
                     games.setdefault(str(game["id"]), game)
@@ -1444,9 +1569,9 @@ class Twitch(object):
                     continue
                 if campaign_id in discovered:
                     allowed = discovered[campaign_id]["allow"]["channels"]
-                    extra = [c for c in allowed if c["id"] not in own_channels]
+                    extra = [c for c in allowed if c["id"] not in preferred_channels]
                     if (
-                        channel_id in own_channels
+                        channel_id in preferred_channels
                         or len(extra) < DIRECTORY_CHANNELS_PER_CAMPAIGN
                     ):
                         allowed.append(entry)
@@ -1475,6 +1600,8 @@ class Twitch(object):
         # campaign id -> channel ids found in the game directory for that campaign
         directory_channels = {}
         directory_checked = {}
+        # Stream Database fallback campaign id -> time it was first offered
+        badge_first_offered = {}
         while self.running:
             scan_stats = None
             try:
@@ -1484,9 +1611,10 @@ class Twitch(object):
                     or ((time.time() - campaigns_update) / 60) > 60
                 ):
                     campaigns_update = time.time()
-                    # The dashboard is kept in case Twitch serves it again; since ~Sep 2026
-                    # it returns null for app clients, so campaigns come from the inventory
-                    # (already started) and from live channels (AvailableDrops).
+                    # Main source: Stream Database's list of running watch badges. Twitch
+                    # (AvailableDrops on their channels/categories) confirms the campaigns;
+                    # the inventory adds campaigns that were already started.
+                    badges, streamdb_error = self.__get_stream_database_badges()
                     dashboard = self.__get_drops_dashboard(status="ACTIVE")
                     campaigns_details = (
                         self.__get_campaigns_details(dashboard) if dashboard else []
@@ -1497,6 +1625,16 @@ class Twitch(object):
                         for c in (inventory.get("dropCampaignsInProgress") or [])
                         if isinstance(c, dict) and c.get("id")
                     ]
+                    earned_names = {
+                        str(event["name"]).strip().lower()
+                        for event in (inventory.get("gameEventDrops") or [])
+                        if isinstance(event, dict) and event.get("name")
+                    }
+                    open_badges = [
+                        badge
+                        for badge in badges
+                        if str(badge.title).strip().lower() not in earned_names
+                    ]
                     known = {c["id"]: c for c in in_progress}
                     known.update(
                         {
@@ -1506,11 +1644,14 @@ class Twitch(object):
                         }
                     )
                     discovered, probed, categories = self.__discover_campaigns(
-                        streamers, list(known.values())
+                        streamers, list(known.values()), open_badges
                     )
                     if not self.running:
                         break
                     campaigns_data = list(known.values()) + discovered
+                    campaigns_data += self.__badge_fallback_campaigns(
+                        open_badges, campaigns_data, badge_first_offered
+                    )
                     campaigns = []
                     scan_stats = {
                         "listed": len(campaigns_data),
@@ -1520,6 +1661,9 @@ class Twitch(object):
                         "in_progress": len(in_progress),
                         "probed_channels": probed,
                         "categories": categories,
+                        "streamdb": len(badges),
+                        "streamdb_earned": len(badges) - len(open_badges),
+                        "streamdb_error": streamdb_error,
                     }
 
                     # Going to clear array and structure. Remove all the timeBasedDrops expired or not started yet
