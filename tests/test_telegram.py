@@ -1,3 +1,4 @@
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -9,6 +10,11 @@ from TwitchChannelPointsMiner.classes.Telegram import Telegram
 
 class TelegramTests(unittest.TestCase):
     def setUp(self):
+        interval = patch(
+            "TwitchChannelPointsMiner.classes.Telegram.MIN_SEND_INTERVAL", 0
+        )
+        interval.start()
+        self.addCleanup(interval.stop)
         self.telegram = Telegram(
             chat_id=123, token="secret-bot-token", events=[Events.GAIN_FOR_WATCH]
         )
@@ -30,6 +36,7 @@ class TelegramTests(unittest.TestCase):
             "TwitchChannelPointsMiner.classes.Telegram", level="WARNING"
         ) as logs:
             self.telegram.send("hello", Events.GAIN_FOR_WATCH)
+            self.telegram.flush()
 
         output = "\n".join(logs.output)
         self.assertIn("HTTP 400", output)
@@ -50,9 +57,61 @@ class TelegramTests(unittest.TestCase):
         ) as logs:
             for _ in range(3):
                 self.telegram.send("hello", Events.GAIN_FOR_WATCH)
+            self.telegram.flush()
 
         warnings = [r for r in logs.records if r.levelname == "WARNING"]
         self.assertEqual(len(warnings), 1)
+
+    @patch("TwitchChannelPointsMiner.classes.Telegram.time.sleep")
+    @patch("TwitchChannelPointsMiner.classes.Telegram.requests.post")
+    def test_rate_limit_waits_and_retries(self, post, sleep):
+        limited = Mock(status_code=429)
+        limited.json.return_value = {
+            "ok": False,
+            "description": "Too Many Requests: retry after 13",
+            "parameters": {"retry_after": 13},
+        }
+        delivered = Mock(status_code=200)
+        delivered.json.return_value = {"ok": True}
+        post.side_effect = [limited, delivered]
+
+        with self.assertNoLogs(
+            "TwitchChannelPointsMiner.classes.Telegram", level="WARNING"
+        ):
+            self.telegram.send("hello", Events.GAIN_FOR_WATCH)
+            self.telegram.flush()
+
+        self.assertEqual(post.call_count, 2)
+        sleep.assert_any_call(13)
+
+    @patch("TwitchChannelPointsMiner.classes.Telegram.time.sleep")
+    @patch("TwitchChannelPointsMiner.classes.Telegram.requests.post")
+    def test_persistent_rate_limit_gives_up_with_warning(self, post, sleep):
+        limited = Mock(status_code=429)
+        limited.json.return_value = {"parameters": {"retry_after": 1}}
+        post.return_value = limited
+
+        with self.assertLogs(
+            "TwitchChannelPointsMiner.classes.Telegram", level="WARNING"
+        ) as logs:
+            self.telegram.send("hello", Events.GAIN_FOR_WATCH)
+            self.telegram.flush()
+
+        self.assertIn("rate limited", "\n".join(logs.output))
+        self.assertGreater(post.call_count, 1)
+
+    @patch("TwitchChannelPointsMiner.classes.Telegram.requests.post")
+    def test_send_does_not_block_caller(self, post):
+        release = threading.Event()
+        post.side_effect = lambda **_: release.wait(5) and Mock(
+            status_code=200, json=Mock(return_value={"ok": True})
+        )
+
+        self.telegram.send("hello", Events.GAIN_FOR_WATCH)
+        self.assertFalse(release.is_set())
+        release.set()
+        self.telegram.flush()
+        post.assert_called_once()
 
     @patch("TwitchChannelPointsMiner.classes.Telegram.requests.get")
     def test_verify_reports_reachable_chat(self, get):

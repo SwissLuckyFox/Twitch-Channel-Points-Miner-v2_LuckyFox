@@ -13,7 +13,7 @@
   <Category>GameServers:</Category>
   <WebUI>http://[IP]:[PORT:5000]/</WebUI>
   <TemplateURL/>
-  <Icon/>
+  <Icon>https://raw.githubusercontent.com/SwissLuckyFox/Twitch-Channel-Points-Miner-v2_LuckyFox/master/assets/bot-icon.png</Icon>
   <ExtraParams>--pids-limit=2048</ExtraParams>
   <PostArgs/>
   <CPUset/>

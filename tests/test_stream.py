@@ -2,9 +2,13 @@ import inspect
 import re
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import TwitchChannelPointsMiner.classes.Twitch as twitch_module
-from TwitchChannelPointsMiner.classes.entities.Streamer import StreamerSettings
+from TwitchChannelPointsMiner.classes.entities.Streamer import (
+    Streamer,
+    StreamerSettings,
+)
 from TwitchChannelPointsMiner.classes.entities.Stream import Stream
 
 TWITCH_SOURCE = Path(twitch_module.__file__)
@@ -22,6 +26,29 @@ class StreamTests(unittest.TestCase):
             with self.subTest(game=game):
                 stream.game = game
                 self.assertIsNone(stream.game_id())
+
+
+class StreamerOfflineNotificationTests(unittest.TestCase):
+    def _offline_record(self, streamer):
+        with patch.object(Streamer, "toggle_chat"), patch.object(
+            Streamer, "__str__", lambda self: self.username
+        ), self.assertLogs(
+            "TwitchChannelPointsMiner.classes.entities.Streamer", level="INFO"
+        ) as logs:
+            streamer.set_offline()
+        return logs.records[-1]
+
+    def test_startup_offline_check_is_not_notified(self):
+        record = self._offline_record(Streamer("someone"))
+        self.assertTrue(getattr(record, "skip_telegram", False))
+        self.assertTrue(getattr(record, "skip_discord", False))
+
+    def test_going_offline_is_notified(self):
+        streamer = Streamer("someone")
+        streamer.is_online = True
+        record = self._offline_record(streamer)
+        self.assertFalse(hasattr(record, "skip_telegram"))
+        self.assertFalse(streamer.is_online)
 
 
 class DropDiscoverySettingsTests(unittest.TestCase):

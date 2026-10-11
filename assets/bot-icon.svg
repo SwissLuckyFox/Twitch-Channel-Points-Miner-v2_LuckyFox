@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="70%">
+      <stop offset="0" stop-color="#2b1f4d"/>
+      <stop offset="1" stop-color="#0e0b1a"/>
+    </radialGradient>
+    <linearGradient id="gem" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a970ff"/>
+      <stop offset="1" stop-color="#7a35e6"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <ellipse cx="290" cy="462" rx="190" ry="22" fill="#2a2140"/>
+
+  <!-- Purple "T" crystal -->
+  <polygon points="285,330 345,275 450,290 465,395 395,455 295,445" fill="url(#gem)"/>
+  <polygon points="345,275 450,290 420,320 330,315" fill="#c4a0ff"/>
+  <polygon points="465,395 395,455 400,420" fill="#5b25b8"/>
+  <polygon points="285,330 330,315 300,445 295,445" fill="#8a4dff"/>
+  <rect x="340" y="322" width="96" height="28" rx="4" fill="#ffffff"/>
+  <rect x="374" y="348" width="28" height="80" rx="4" fill="#ffffff"/>
+
+  <!-- Sparkles where the pickaxe hits -->
+  <g fill="#ffd84a">
+    <path d="M440 238 l6 16 16 6 -16 6 -6 16 -6 -16 -16 -6 16 -6z"/>
+    <path d="M392 246 l4 10 10 4 -10 4 -4 10 -4 -10 -10 -4 10 -4z"/>
+    <path d="M470 280 l3 8 8 3 -8 3 -3 8 -3 -8 -8 -3 8 -3z"/>
+  </g>
+
+  <!-- Fox tail -->
+  <path d="M135 410 C 45 410, 35 300, 85 270 C 85 330, 115 365, 165 375 Z" fill="#f28c28"/>
+  <path d="M85 270 C 60 290, 58 320, 70 340 C 80 315, 85 295, 85 270 Z" fill="#fff1dc"/>
+
+  <!-- Fox body -->
+  <ellipse cx="165" cy="365" rx="62" ry="78" fill="#f28c28"/>
+  <ellipse cx="182" cy="378" rx="32" ry="52" fill="#fff1dc"/>
+  <ellipse cx="140" cy="440" rx="22" ry="12" fill="#7a3a12"/>
+  <ellipse cx="195" cy="442" rx="22" ry="12" fill="#7a3a12"/>
+
+  <!-- Arms -->
+  <line x1="195" y1="320" x2="286" y2="278" stroke="#e07a1a" stroke-width="26" stroke-linecap="round"/>
+  <line x1="185" y1="355" x2="232" y2="342" stroke="#e07a1a" stroke-width="24" stroke-linecap="round"/>
+
+  <!-- Pickaxe -->
+  <line x1="225" y1="350" x2="370" y2="176" stroke="#8b5a2b" stroke-width="14" stroke-linecap="round"/>
+  <path d="M298 132 Q 375 160 420 240" fill="none" stroke="#4a5560" stroke-width="26" stroke-linecap="round"/>
+  <path d="M298 132 Q 375 160 420 240" fill="none" stroke="#c9d1d9" stroke-width="16" stroke-linecap="round"/>
+
+  <!-- Paws over the handle -->
+  <circle cx="286" cy="278" r="16" fill="#7a3a12"/>
+  <circle cx="232" cy="342" r="15" fill="#7a3a12"/>
+
+  <!-- Fox head -->
+  <polygon points="130,205 140,135 182,192" fill="#f28c28"/>
+  <polygon points="141,192 146,156 168,190" fill="#5a2a10"/>
+  <polygon points="172,192 205,135 222,205" fill="#f28c28"/>
+  <polygon points="184,192 203,153 211,196" fill="#5a2a10"/>
+  <ellipse cx="175" cy="235" rx="62" ry="52" fill="#f28c28"/>
+  <polygon points="212,222 276,252 212,278" fill="#f28c28"/>
+  <polygon points="178,256 276,254 218,288 172,282" fill="#fff1dc"/>
+  <polygon points="115,245 150,272 122,284" fill="#fff1dc"/>
+  <circle cx="273" cy="253" r="8" fill="#1a1020"/>
+  <ellipse cx="212" cy="230" rx="6" ry="8" fill="#1a1020"/>
+  <circle cx="214" cy="227" r="2" fill="#ffffff"/>
+</svg>
