@@ -37,12 +37,12 @@ class Drop(object):
         "is_printable",
     ]
 
-    def __init__(self, dict):
-        self.id = dict["id"]
-        self.name = dict["name"]
+    def __init__(self, data):
+        self.id = data["id"]
+        self.name = data["name"]
         benefits = [
             edge["benefit"]
-            for edge in (dict.get("benefitEdges") or [])
+            for edge in (data.get("benefitEdges") or [])
             if isinstance(edge, dict) and isinstance(edge.get("benefit"), dict)
         ]
         self.benefit = ", ".join(
@@ -52,8 +52,8 @@ class Drop(object):
         self.benefit_types = [
             b["distributionType"] for b in benefits if b.get("distributionType")
         ]
-        self.minutes_required = dict.get("requiredMinutesWatched") or 0
-        self.required_subs = dict.get("requiredSubs") or 0
+        self.minutes_required = data.get("requiredMinutesWatched") or 0
+        self.required_subs = data.get("requiredSubs") or 0
 
         self.has_preconditions_met = None  # [True, False], None we don't know
         self.current_minutes_watched = 0
@@ -63,8 +63,8 @@ class Drop(object):
         self.is_printable = False
         self.percentage_progress = 0
 
-        self.end_at = datetime.strptime(dict["endAt"], "%Y-%m-%dT%H:%M:%SZ")
-        self.start_at = datetime.strptime(dict["startAt"], "%Y-%m-%dT%H:%M:%SZ")
+        self.end_at = datetime.strptime(data["endAt"], "%Y-%m-%dT%H:%M:%SZ")
+        self.start_at = datetime.strptime(data["startAt"], "%Y-%m-%dT%H:%M:%SZ")
         self.dt_match = self.start_at < datetime.now() < self.end_at
 
     @property
