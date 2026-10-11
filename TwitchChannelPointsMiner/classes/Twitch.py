@@ -344,8 +344,7 @@ class Twitch(object):
             USER_AGENTS["Android"]["APP"],
             None,
         )
-        login.device_id = self.device_id
-        login.session.headers["X-Device-Id"] = self.device_id
+        login.set_device_id(self.device_id)
         login.oauth_profile = {
             "origin": DROPS_CLIENT_URL,
             "referer": DROPS_CLIENT_URL,
@@ -359,6 +358,7 @@ class Twitch(object):
         try:
             if os.path.isfile(cookies_file):
                 login.load_cookies(cookies_file)
+                login.use_web_device_id(DROPS_CLIENT_URL)
                 login.set_token(login.get_auth_token())
             else:
                 logger.info(
@@ -367,6 +367,7 @@ class Twitch(object):
                     "activation page as the first login.",
                     extra={"emoji": ":key:", "event": Events.DROP_SCAN},
                 )
+                login.use_web_device_id(DROPS_CLIENT_URL)
                 if not login.login_flow():
                     return False
                 login.save_cookies(cookies_file)

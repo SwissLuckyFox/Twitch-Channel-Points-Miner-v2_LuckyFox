@@ -20,6 +20,18 @@ from TwitchChannelPointsMiner.constants import GQLOperations, USER_AGENTS
 logger = logging.getLogger(__name__)
 
 
+def _oauth_error_text(response):
+    """Twitch's short error reason from an OAuth error response (contains no secrets)."""
+    try:
+        data = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    message = data.get("message") or data.get("error_description") or data.get("error")
+    return f" ({str(message)[:200]})" if message else ""
+
+
 class TwitchLogin(object):
     __slots__ = [
         "client_id",
@@ -77,7 +89,7 @@ class TwitchLogin(object):
         if device_response.status_code != 200:
             raise RuntimeError(
                 "Twitch device authorization request failed with HTTP "
-                f"{device_response.status_code}."
+                f"{device_response.status_code}{_oauth_error_text(device_response)}."
             )
 
         try:
@@ -284,3 +296,23 @@ class TwitchLogin(object):
 
     def get_auth_token(self):
         return self.get_cookie_value("auth-token")
+
+    def set_device_id(self, device_id):
+        self.device_id = device_id
+        self.session.headers["X-Device-Id"] = device_id
+
+    def use_web_device_id(self, url):
+        """Adopt the device ID Twitch's website assigns (unique_id cookie), like the official apps."""
+        saved = self.get_cookie_value("unique_id")
+        if saved:
+            self.set_device_id(saved)
+            return True
+        try:
+            self.session.get(url, headers={"Accept": "text/html"}, timeout=30)
+        except requests.exceptions.RequestException:
+            return False
+        for cookie in self.session.cookies:
+            if cookie.name == "unique_id" and cookie.value:
+                self.set_device_id(cookie.value)
+                return True
+        return False
