@@ -296,8 +296,8 @@ class ChannelPointsContextTests(unittest.TestCase):
     def test_drops_dashboard_retries_with_alternate_variant_and_remembers_it(self):
         from TwitchChannelPointsMiner.classes import Twitch as twitch_module
 
-        twitch_module._alternate_drops_operations.clear()
-        self.addCleanup(twitch_module._alternate_drops_operations.clear)
+        twitch_module._preferred_drops_variants.clear()
+        self.addCleanup(twitch_module._preferred_drops_variants.clear)
         campaigns = {"data": {"currentUser": {"dropCampaigns": [{"id": "a", "status": "ACTIVE"}]}}}
         self.post_gql_request.side_effect = [
             {"data": {"currentUser": {"dropCampaigns": None}}},
@@ -331,6 +331,56 @@ class ChannelPointsContextTests(unittest.TestCase):
             self.twitch._Twitch__get_drops_dashboard()
 
         self.assertIn("data.currentUser is null", logs.output[0])
+
+    def test_drops_dashboard_prefers_android_drops_login(self):
+        from TwitchChannelPointsMiner.classes import Twitch as twitch_module
+
+        twitch_module._preferred_drops_variants.clear()
+        self.addCleanup(twitch_module._preferred_drops_variants.clear)
+        drops_login = Mock()
+        self.twitch.drops_login = drops_login
+        self.post_gql_request.return_value = {
+            "data": {"currentUser": {"dropCampaigns": [{"id": "a", "status": "ACTIVE"}]}}
+        }
+
+        self.assertEqual(len(self.twitch._Twitch__get_drops_dashboard()), 1)
+        self.assertIs(self.post_gql_request.call_args.kwargs["login"], drops_login)
+
+    def test_rejected_drops_login_is_reset_and_tv_client_used(self):
+        from TwitchChannelPointsMiner.classes import Twitch as twitch_module
+
+        twitch_module._preferred_drops_variants.clear()
+        self.addCleanup(twitch_module._preferred_drops_variants.clear)
+        self.twitch.drops_login = Mock()
+        self.twitch.cookies_file = "/nonexistent/cookies/user.pkl"
+        unauthorized = {"error": "Unauthorized", "status": 401, "message": "invalid token"}
+        campaigns = {"data": {"currentUser": {"dropCampaigns": []}}}
+        self.post_gql_request.side_effect = [unauthorized, unauthorized, campaigns]
+
+        with self.assertLogs("TwitchChannelPointsMiner.classes.Twitch", level="WARNING"):
+            self.assertEqual(self.twitch._Twitch__get_drops_dashboard(), [])
+
+        self.assertIsNone(self.twitch.drops_login)
+        self.assertIsNone(self.post_gql_request.call_args.kwargs["login"])
+
+    @patch("TwitchChannelPointsMiner.classes.Twitch.requests.post")
+    def test_drops_login_requests_use_android_client_headers(self, post):
+        from TwitchChannelPointsMiner.constants import DROPS_CLIENT_ID, DROPS_CLIENT_URL
+
+        post.return_value.json.return_value = {"data": {}}
+        self.twitch.client_session = "session-id"
+        drops_login = Mock(client_id=DROPS_CLIENT_ID, device_id="device-id")
+        drops_login.get_auth_token.return_value = "drops-token"
+
+        self.post_gql_patcher.stop()
+        Twitch.post_gql_request(self.twitch, {"operationName": "test"}, login=drops_login)
+
+        headers = post.call_args.kwargs["headers"]
+        self.assertEqual(headers["Authorization"], "OAuth drops-token")
+        self.assertEqual(headers["Client-Id"], DROPS_CLIENT_ID)
+        self.assertEqual(headers["Origin"], DROPS_CLIENT_URL)
+        self.assertEqual(headers["User-Agent"], USER_AGENTS["Android"]["APP"])
+        self.assertNotIn("Client-Version", headers)
 
     def test_campaign_details_skip_malformed_responses(self):
         self.twitch.twitch_login = Mock()

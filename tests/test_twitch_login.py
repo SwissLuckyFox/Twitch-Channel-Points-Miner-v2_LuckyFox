@@ -77,6 +77,52 @@ class TwitchLoginTests(unittest.TestCase):
         self.assertEqual(send_oauth_request.call_count, 3)
         self.assertNotIn("private-device-code", "\n".join(captured_logs.output))
 
+    def test_oauth_profile_overrides_client_headers(self):
+        login = make_login()
+        login.oauth_profile = {
+            "origin": "https://www.twitch.tv",
+            "referer": "https://www.twitch.tv",
+            "user_agent": USER_AGENTS["Android"]["APP"],
+        }
+
+        login.send_oauth_request("https://id.twitch.tv/oauth2/device", {})
+
+        headers = login.session.post.call_args.kwargs["headers"]
+        self.assertEqual(headers["Origin"], "https://www.twitch.tv")
+        self.assertEqual(headers["Referer"], "https://www.twitch.tv")
+        self.assertEqual(headers["User-Agent"], USER_AGENTS["Android"]["APP"])
+
+    @patch("TwitchChannelPointsMiner.classes.TwitchLogin.time.sleep")
+    def test_device_login_logs_code_preformatted_and_can_be_cancelled(self, sleep):
+        login = make_login()
+        login.oauth_profile = {
+            "label": "Drops login: ",
+            "scopes": "",
+            "keep_waiting": lambda: False,
+        }
+        device_response = Mock(status_code=200)
+        device_response.json.return_value = {
+            "device_code": "private-device-code",
+            "user_code": "ABCD-EFGH",
+            "interval": 1,
+            "expires_in": 600,
+        }
+        with patch.object(
+            TwitchLogin, "send_oauth_request", return_value=device_response
+        ) as send_oauth_request, patch(
+            "TwitchChannelPointsMiner.classes.TwitchLogin.time.monotonic",
+            return_value=0,
+        ), self.assertLogs(
+            "TwitchChannelPointsMiner.classes.TwitchLogin", level="INFO"
+        ) as captured_logs:
+            with self.assertRaisesRegex(RuntimeError, "cancelled"):
+                login.login_flow()
+
+        self.assertEqual(send_oauth_request.call_args.args[1]["scopes"], "")
+        code_records = [r for r in captured_logs.records if "ABCD-EFGH" in r.msg]
+        self.assertEqual(len(code_records), 1)
+        self.assertTrue(code_records[0].msg.startswith("Drops login: Open "))
+
     def test_device_login_reports_denial_without_exposing_codes(self):
         login = make_login()
         device_response = Mock(status_code=200)

@@ -6,6 +6,10 @@ WEBSOCKET = "wss://pubsub-edge.twitch.tv/v1"
 CLIENT_ID = "ue6666qo983tsx6so1t0vnawi233wa"
 CLIENT_VERSION = "ef928475-9403-42f2-8a34-55784bd08e16"
 DROP_ID = "c2542d6d-cd10-4532-919b-3d19f30a768b"
+# Twitch Android app client: Twitch only returns the drop campaign list to this client
+# (same client DevilXD/TwitchDropsMiner uses). Needs its own token, see Twitch.ensure_drops_login.
+DROPS_CLIENT_ID = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
+DROPS_CLIENT_URL = "https://www.twitch.tv"
 
 USER_AGENTS = {
     "Windows": {
@@ -18,7 +22,9 @@ USER_AGENTS = {
     },
     "Android": {
         "TV": "Mozilla/5.0 (Linux; Android 7.1; Smart Box C1) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+        "APP": "Dalvik/2.1.0 (Linux; U; Android 16; SM-S911B Build/TP1A.220624.014) "
+        "tv.twitch.android.app/25.3.0/2503006",
     },
 }
 

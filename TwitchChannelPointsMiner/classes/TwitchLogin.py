@@ -31,6 +31,7 @@ class TwitchLogin(object):
         "user_id",
         "email",
         "cookies",
+        "oauth_profile",
     ]
 
     def __init__(self, client_id, username, user_agent, password=None):
@@ -51,16 +52,25 @@ class TwitchLogin(object):
         self.email = None
 
         self.cookies = []
+        # Optional overrides for a non-TV client: origin, referer, user_agent, scopes,
+        # label (log prefix), extra (logging extra for the code message), keep_waiting (callable).
+        self.oauth_profile = None
+
+    def __profile(self):
+        return getattr(self, "oauth_profile", None) or {}
 
     def login_flow(self):
-        logger.info("Starting Twitch device authorization.")
+        profile = self.__profile()
+        label = profile.get("label", "")
+        logger.info("%sStarting Twitch device authorization.", label)
         device_response = self.send_oauth_request(
             "https://id.twitch.tv/oauth2/device",
             {
                 "client_id": self.client_id,
-                "scopes": (
+                "scopes": profile.get(
+                    "scopes",
                     "channel_read chat:read user_blocks_edit "
-                    "user_blocks_read user_follows_edit user_read"
+                    "user_blocks_read user_follows_edit user_read",
                 ),
             },
         )
@@ -89,9 +99,14 @@ class TwitchLogin(object):
                 "Twitch returned invalid device authorization timing values."
             )
 
-        logger.info("Open %s and enter this code: %s", verification_uri, user_code)
+        # Pre-formatted: notification handlers forward record.msg without its args.
+        logger.info(
+            f"{label}Open {verification_uri} and enter this code: {user_code}",
+            extra=profile.get("extra"),
+        )
         logger.info("The code expires in %d minutes.", max(1, expires_in // 60))
 
+        keep_waiting = profile.get("keep_waiting")
         deadline = time.monotonic() + expires_in
         token_request = {
             "client_id": self.client_id,
@@ -100,6 +115,8 @@ class TwitchLogin(object):
         }
         while time.monotonic() < deadline:
             time.sleep(interval)
+            if keep_waiting is not None and not keep_waiting():
+                raise RuntimeError("Twitch device authorization was cancelled.")
             if time.monotonic() >= deadline:
                 break
 
@@ -154,6 +171,7 @@ class TwitchLogin(object):
         self.session.headers.update({"Authorization": f"Bearer {self.token}"})
 
     def send_oauth_request(self, url, form_data):
+        profile = self.__profile()
         try:
             response = self.session.post(
                 url,
@@ -165,10 +183,10 @@ class TwitchLogin(object):
                     "Cache-Control": "no-cache",
                     "Client-Id": self.client_id,
                     "Host": "id.twitch.tv",
-                    "Origin": "https://android.tv.twitch.tv",
+                    "Origin": profile.get("origin", "https://android.tv.twitch.tv"),
                     "Pragma": "no-cache",
-                    "Referer": "https://android.tv.twitch.tv/",
-                    "User-Agent": USER_AGENTS["Android"]["TV"],
+                    "Referer": profile.get("referer", "https://android.tv.twitch.tv/"),
+                    "User-Agent": profile.get("user_agent", USER_AGENTS["Android"]["TV"]),
                     "X-Device-Id": self.device_id,
                 },
                 timeout=30,

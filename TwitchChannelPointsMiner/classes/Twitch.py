@@ -37,6 +37,8 @@ from TwitchChannelPointsMiner.classes.TwitchLogin import TwitchLogin
 from TwitchChannelPointsMiner.constants import (
     CLIENT_ID,
     CLIENT_VERSION,
+    DROPS_CLIENT_ID,
+    DROPS_CLIENT_URL,
     GQLOperations,
     URL,
     USER_AGENTS,
@@ -81,8 +83,8 @@ def _graphql_error_details(response):
 
 # Operation name -> persisted query hash that replaced a stale primary hash.
 _preferred_hashes = {}
-# Drops operations that only answer with TwitchDropsMiner's request variant.
-_alternate_drops_operations = set()
+# Drops operation name -> (client, request variant) that last returned data.
+_preferred_drops_variants = {}
 
 
 def _alternate_drops_query(operation):
@@ -292,6 +294,7 @@ class Twitch(object):
         "client_version",
         "client_version_loaded",
         "twilight_build_id_pattern",
+        "drops_login",
     ]
 
     def __init__(self, username, user_agent, password=None):
@@ -312,6 +315,7 @@ class Twitch(object):
         )
         self.twitch_login.device_id = self.device_id
         self.twitch_login.session.headers["X-Device-Id"] = self.device_id
+        self.drops_login = None
         self.running = True
 
     def login(self):
@@ -321,6 +325,75 @@ class Twitch(object):
         else:
             self.twitch_login.load_cookies(self.cookies_file)
             self.twitch_login.set_token(self.twitch_login.get_auth_token())
+
+    def __drops_cookies_file(self):
+        return re.sub(r"\.pkl$", "_drops.pkl", self.cookies_file)
+
+    def ensure_drops_login(self):
+        """
+        Twitch only hands the drop campaign list to its Android app client, so drops
+        requests use a separate token for that client. The first time this shows a
+        second activation code (also sent to Telegram); the token is then saved.
+        """
+        if getattr(self, "drops_login", None) is not None:
+            return True
+
+        login = TwitchLogin(
+            DROPS_CLIENT_ID,
+            self.twitch_login.username,
+            USER_AGENTS["Android"]["APP"],
+            None,
+        )
+        login.device_id = self.device_id
+        login.session.headers["X-Device-Id"] = self.device_id
+        login.oauth_profile = {
+            "origin": DROPS_CLIENT_URL,
+            "referer": DROPS_CLIENT_URL,
+            "user_agent": USER_AGENTS["Android"]["APP"],
+            "scopes": "",
+            "label": "Drops login (one-time, Twitch Android app): ",
+            "extra": {"emoji": ":key:", "event": Events.DROP_SCAN},
+            "keep_waiting": lambda: self.running,
+        }
+        cookies_file = self.__drops_cookies_file()
+        try:
+            if os.path.isfile(cookies_file):
+                login.load_cookies(cookies_file)
+                login.set_token(login.get_auth_token())
+            else:
+                logger.info(
+                    "Drop scan needs a second, one-time Twitch login: Twitch only lists "
+                    "drop campaigns for its Android app. Enter the code below at the same "
+                    "activation page as the first login.",
+                    extra={"emoji": ":key:", "event": Events.DROP_SCAN},
+                )
+                if not login.login_flow():
+                    return False
+                login.save_cookies(cookies_file)
+                logger.info(
+                    "Drops login done, the token is saved for future starts.",
+                    extra={"emoji": ":key:", "event": Events.DROP_SCAN},
+                )
+        except Exception as error:
+            logger.warning(
+                "Drops login failed (%s). Drop scans use the normal login until the next try.",
+                error,
+            )
+            return False
+        if not login.get_auth_token():
+            return False
+        self.drops_login = login
+        return True
+
+    def __reset_drops_login(self):
+        self.drops_login = None
+        try:
+            os.remove(self.__drops_cookies_file())
+        except OSError:
+            pass
+        logger.warning(
+            "Twitch rejected the saved drops login. A new activation code will be shown on the next drop scan."
+        )
 
     # === STREAMER / STREAM / INFO === #
     def update_stream(self, streamer):
@@ -569,13 +642,13 @@ class Twitch(object):
             )
             self.__chuncked_sleep(random_sleep * 60, chunk_size=chunk_size)
 
-    def post_gql_request(self, json_data):
+    def post_gql_request(self, json_data, login=None):
         json_data = _apply_hashes(json_data, _preferred_hashes)
-        response = self.__send_gql_request(json_data)
+        response = self.__send_gql_request(json_data, login)
         fallback_data = _with_fallback_hashes(json_data, response)
         if fallback_data is not None:
             logger.debug("Retrying GraphQL request with fallback persisted query hash")
-            fallback_response = self.__send_gql_request(fallback_data)
+            fallback_response = self.__send_gql_request(fallback_data, login)
             responses = (
                 fallback_response
                 if isinstance(fallback_response, list)
@@ -593,19 +666,31 @@ class Twitch(object):
                 return fallback_response
         return response
 
-    def __send_gql_request(self, json_data):
+    def __send_gql_request(self, json_data, login=None):
+        if login is None:
+            headers = {
+                "Authorization": f"OAuth {self.twitch_login.get_auth_token()}",
+                "Client-Id": CLIENT_ID,
+                "Client-Session-Id": self.client_session,
+                "Client-Version": self.update_client_version(),
+                "User-Agent": self.user_agent,
+                "X-Device-Id": self.device_id,
+            }
+        else:
+            headers = {
+                "Authorization": f"OAuth {login.get_auth_token()}",
+                "Client-Id": login.client_id,
+                "Client-Session-Id": self.client_session,
+                "Origin": DROPS_CLIENT_URL,
+                "Referer": DROPS_CLIENT_URL,
+                "User-Agent": USER_AGENTS["Android"]["APP"],
+                "X-Device-Id": login.device_id,
+            }
         try:
             response = requests.post(
                 GQLOperations.url,
                 json=json_data,
-                headers={
-                    "Authorization": f"OAuth {self.twitch_login.get_auth_token()}",
-                    "Client-Id": CLIENT_ID,
-                    "Client-Session-Id": self.client_session,
-                    "Client-Version": self.update_client_version(),
-                    "User-Agent": self.user_agent,
-                    "X-Device-Id": self.device_id,
-                },
+                headers=headers,
             )
             logger.debug(
                 f"Data: {json_data}, Status code: {response.status_code}, Content: {response.text}"
@@ -1048,34 +1133,36 @@ class Twitch(object):
             return node if isinstance(node, expected_type) else None
 
         alternate = _alternate_drops_query(operation)
-        variants = [operation, alternate]
-        if name in _alternate_drops_operations:
-            variants.reverse()
+        attempts = []
+        drops_login = getattr(self, "drops_login", None)
+        for login, client in ((drops_login, "android"), (None, "tv")):
+            if client == "android" and login is None:
+                continue
+            attempts.append(((client, "default"), operation, login))
+            attempts.append(((client, "alternate"), alternate, login))
+        preferred = _preferred_drops_variants.get(name)
+        attempts.sort(key=lambda attempt: attempt[0] != preferred)
 
-        first_problem = problem = None
-        for index, variant in enumerate(variants):
-            response = self.post_gql_request(variant)
+        problems = []
+        for key, query, login in attempts:
+            response = self.post_gql_request(query, login=login)
             value = extract(response)
             if value is not None:
-                if index == 1:
-                    if variant is alternate:
-                        _alternate_drops_operations.add(name)
-                    else:
-                        _alternate_drops_operations.discard(name)
-                    logger.info(
-                        "Drop scan: %s switched request variant (previous attempt: %s)",
-                        name,
-                        first_problem,
-                    )
+                if key != preferred:
+                    _preferred_drops_variants[name] = key
+                    if problems:
+                        logger.info(
+                            "Drop scan: %s now uses the %s client with the %s request (before: %s)",
+                            name,
+                            key[0],
+                            key[1],
+                            "; ".join(problems),
+                        )
                 return value, None
-            problem = _describe_response(response, path)
-            if first_problem is None:
-                first_problem = problem
-        return None, (
-            first_problem
-            if first_problem == problem
-            else f"{first_problem}; alternative request: {problem}"
-        )
+            if login is not None and isinstance(response, dict) and response.get("status") == 401:
+                self.__reset_drops_login()
+            problems.append(f"{key[0]}/{key[1]}: {_describe_response(response, path)}")
+        return None, "; ".join(problems)
 
     def __get_inventory(self):
         inventory, problem = self.__drops_query(
@@ -1115,7 +1202,10 @@ class Twitch(object):
                     "channelLogin": f"{self.twitch_login.get_user_id()}",
                 }
 
-            response = self.post_gql_request(json_data)
+            drops_login = getattr(self, "drops_login", None)
+            response = self.post_gql_request(json_data, login=drops_login)
+            if drops_login is not None and not isinstance(response, list):
+                response = self.post_gql_request(json_data)
             if not isinstance(response, list):
                 logger.warning(
                     "Drop scan: could not load details for %s campaign(s).%s",
@@ -1309,6 +1399,9 @@ class Twitch(object):
                     or ((time.time() - campaigns_update) / 60) > 60
                 ):
                     campaigns_update = time.time()
+                    self.ensure_drops_login()
+                    if not self.running:
+                        break
                     # Get full details from current ACTIVE campaigns
                     # Use dashboard so we can explore new drops not currently active in our Inventory
                     dashboard = self.__get_drops_dashboard(status="ACTIVE")
