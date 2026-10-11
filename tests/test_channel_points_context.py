@@ -293,6 +293,45 @@ class ChannelPointsContextTests(unittest.TestCase):
             [{"id": "a", "status": "ACTIVE"}],
         )
 
+    def test_drops_dashboard_retries_with_alternate_variant_and_remembers_it(self):
+        from TwitchChannelPointsMiner.classes import Twitch as twitch_module
+
+        twitch_module._alternate_drops_operations.clear()
+        self.addCleanup(twitch_module._alternate_drops_operations.clear)
+        campaigns = {"data": {"currentUser": {"dropCampaigns": [{"id": "a", "status": "ACTIVE"}]}}}
+        self.post_gql_request.side_effect = [
+            {"data": {"currentUser": {"dropCampaigns": None}}},
+            campaigns,
+            campaigns,
+        ]
+
+        self.assertEqual(
+            self.twitch._Twitch__get_drops_dashboard(status="ACTIVE"),
+            [{"id": "a", "status": "ACTIVE"}],
+        )
+        alternate = self.post_gql_request.call_args_list[1].args[0]
+        self.assertEqual(alternate["variables"], {"fetchRewardCampaigns": False})
+        self.assertEqual(
+            alternate["extensions"]["persistedQuery"]["sha256Hash"],
+            GQLOperations.FallbackHashes["ViewerDropsDashboard"],
+        )
+        # The original constant must stay untouched.
+        self.assertEqual(
+            GQLOperations.ViewerDropsDashboard["variables"], {"fetchRewardCampaigns": True}
+        )
+
+        # Next scan starts directly with the variant that worked.
+        self.twitch._Twitch__get_drops_dashboard()
+        self.assertEqual(self.post_gql_request.call_args_list[2].args[0], alternate)
+
+    def test_drops_dashboard_warning_names_where_the_response_stops(self):
+        self.post_gql_request.return_value = {"data": {"currentUser": None}}
+
+        with self.assertLogs("TwitchChannelPointsMiner.classes.Twitch", level="WARNING") as logs:
+            self.twitch._Twitch__get_drops_dashboard()
+
+        self.assertIn("data.currentUser is null", logs.output[0])
+
     def test_campaign_details_skip_malformed_responses(self):
         self.twitch.twitch_login = Mock()
         self.twitch.twitch_login.get_user_id.return_value = "123"

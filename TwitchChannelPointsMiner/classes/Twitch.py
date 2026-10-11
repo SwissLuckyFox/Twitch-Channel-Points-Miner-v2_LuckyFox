@@ -81,6 +81,43 @@ def _graphql_error_details(response):
 
 # Operation name -> persisted query hash that replaced a stale primary hash.
 _preferred_hashes = {}
+# Drops operations that only answer with TwitchDropsMiner's request variant.
+_alternate_drops_operations = set()
+
+
+def _alternate_drops_query(operation):
+    """TwitchDropsMiner's variant of a drops query: newer hash, fetchRewardCampaigns=False."""
+    variant = copy.deepcopy(operation)
+    name = variant.get("operationName")
+    new_hash = GQLOperations.FallbackHashes.get(name)
+    if new_hash:
+        variant["extensions"]["persistedQuery"]["sha256Hash"] = new_hash
+    variant["variables"] = dict(variant.get("variables") or {})
+    variant["variables"]["fetchRewardCampaigns"] = False
+    return variant
+
+
+def _describe_response(response, path):
+    """Short, token-free description of where a GraphQL response stops, e.g. 'data.currentUser is null'."""
+    if response in (None, {}):
+        return "empty response (request failed)"
+    if not isinstance(response, dict):
+        return f"unexpected response type {type(response).__name__}"
+    errors = _graphql_error_details(response)
+    if errors:
+        return errors.strip()
+    node = response
+    walked = []
+    for key in path:
+        walked.append(key)
+        if not isinstance(node, dict):
+            return f"{'.'.join(walked[:-1])} is not an object"
+        if key not in node:
+            return f"{'.'.join(walked)} is missing"
+        node = node[key]
+        if node is None:
+            return f"{'.'.join(walked)} is null"
+    return f"{'.'.join(walked)} has type {type(node).__name__}"
 
 
 def _persisted_query_not_found(response):
@@ -997,26 +1034,67 @@ class Twitch(object):
         except (ValueError, KeyError):
             return []
 
+    def __drops_query(self, operation, path, expected_type):
+        """Run a drops query; if the answer lacks the expected value, retry once with
+        TwitchDropsMiner's request variant and keep using whichever variant works."""
+        name = operation["operationName"]
+
+        def extract(response):
+            node = response
+            for key in path:
+                if not isinstance(node, dict):
+                    return None
+                node = node.get(key)
+            return node if isinstance(node, expected_type) else None
+
+        alternate = _alternate_drops_query(operation)
+        variants = [operation, alternate]
+        if name in _alternate_drops_operations:
+            variants.reverse()
+
+        first_problem = problem = None
+        for index, variant in enumerate(variants):
+            response = self.post_gql_request(variant)
+            value = extract(response)
+            if value is not None:
+                if index == 1:
+                    if variant is alternate:
+                        _alternate_drops_operations.add(name)
+                    else:
+                        _alternate_drops_operations.discard(name)
+                    logger.info(
+                        "Drop scan: %s switched request variant (previous attempt: %s)",
+                        name,
+                        first_problem,
+                    )
+                return value, None
+            problem = _describe_response(response, path)
+            if first_problem is None:
+                first_problem = problem
+        return None, (
+            first_problem
+            if first_problem == problem
+            else f"{first_problem}; alternative request: {problem}"
+        )
+
     def __get_inventory(self):
-        response = self.post_gql_request(GQLOperations.Inventory)
-        try:
-            return (
-                response["data"]["currentUser"]["inventory"] if response != {} else {}
-            )
-        except (ValueError, KeyError, TypeError):
+        inventory, problem = self.__drops_query(
+            GQLOperations.Inventory, ("data", "currentUser", "inventory"), dict
+        )
+        if inventory is None:
+            logger.warning("Drop scan: Twitch did not return the drops inventory (%s)", problem)
             return {}
+        return inventory
 
     def __get_drops_dashboard(self, status=None):
-        response = self.post_gql_request(GQLOperations.ViewerDropsDashboard)
-        try:
-            campaigns = response["data"]["currentUser"]["dropCampaigns"]
-        except (KeyError, TypeError):
-            campaigns = None
-
-        if not isinstance(campaigns, list):
+        campaigns, problem = self.__drops_query(
+            GQLOperations.ViewerDropsDashboard,
+            ("data", "currentUser", "dropCampaigns"),
+            list,
+        )
+        if campaigns is None:
             logger.warning(
-                "Drop scan: Twitch did not return the drop campaign list.%s",
-                _graphql_error_details(response) or " (empty response)",
+                "Drop scan: Twitch did not return the drop campaign list (%s)", problem
             )
             return []
 
