@@ -407,6 +407,43 @@ class CampaignDiscoveryTests(unittest.TestCase):
         self.assertEqual(probed, 1)
 
 
+class StreamLoadTests(unittest.TestCase):
+    def test_last_playlist_url(self):
+        text = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nhttps://a/high.m3u8\n#X\nhttps://a/low.m3u8\n"
+        self.assertEqual(twitch_module._last_playlist_url(text), "https://a/low.m3u8")
+        self.assertIsNone(twitch_module._last_playlist_url("#EXTM3U\n"))
+
+    def test_loads_lowest_quality_chunk(self):
+        from unittest.mock import Mock
+
+        twitch = object.__new__(Twitch)
+        twitch.user_agent = "ua"
+        streamer = Streamer("khaldor")
+        token = {"data": {"streamPlaybackAccessToken": {"signature": "s", "value": "v"}}}
+        master = Mock(status_code=200, text="#EXTM3U\nhttps://a/high.m3u8\nhttps://a/low.m3u8\n")
+        media = Mock(status_code=200, text="#EXTINF:2\nhttps://a/1.ts\n#EXTINF:2\nhttps://a/2.ts\n")
+        with patch.object(Twitch, "post_gql_request", return_value=token) as post, patch(
+            "TwitchChannelPointsMiner.classes.Twitch.requests.get", side_effect=[master, media]
+        ) as get, patch(
+            "TwitchChannelPointsMiner.classes.Twitch.requests.head",
+            return_value=Mock(status_code=200),
+        ) as head:
+            self.assertTrue(twitch.load_stream_segment(streamer))
+        self.assertEqual(post.call_args.args[0]["variables"]["login"], "khaldor")
+        self.assertEqual(get.call_args_list[0].kwargs["params"], {"sig": "s", "token": "v"})
+        self.assertEqual(get.call_args_list[1].args[0], "https://a/low.m3u8")
+        self.assertEqual(head.call_args.args[0], "https://a/2.ts")
+
+    def test_missing_token_skips_stream_load(self):
+        twitch = object.__new__(Twitch)
+        twitch.user_agent = "ua"
+        with patch.object(Twitch, "post_gql_request", return_value={"errors": [{}]}), patch(
+            "TwitchChannelPointsMiner.classes.Twitch.requests.get"
+        ) as get:
+            self.assertFalse(twitch.load_stream_segment(Streamer("khaldor")))
+        get.assert_not_called()
+
+
 class PersistedQueryFallbackTests(unittest.TestCase):
     def setUp(self):
         twitch_module._preferred_hashes.clear()

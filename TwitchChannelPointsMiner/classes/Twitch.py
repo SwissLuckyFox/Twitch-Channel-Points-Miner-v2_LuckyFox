@@ -290,6 +290,16 @@ def _campaigns_from_badge(badge):
     return result
 
 
+def _last_playlist_url(text):
+    """Last URL line of an m3u8 playlist (lowest quality variant / newest chunk)."""
+    urls = [
+        line.strip()
+        for line in (text or "").splitlines()
+        if line.strip().startswith(("http://", "https://"))
+    ]
+    return urls[-1] if urls else None
+
+
 def _scan_sources(stats):
     """Where the hourly scan looked, e.g. '1 started in your inventory; 12 live channel(s) checked in Rust'."""
     if "probed_channels" not in stats:
@@ -822,6 +832,61 @@ class Twitch(object):
             )
         return current
 
+    def load_stream_segment(self, streamer):
+        """
+        Load the stream like a player does (playback token -> playlist -> HEAD of the
+        newest video chunk). Since 2024 Twitch only counts drop progress for viewers that
+        fetch the video; the minute-watched event alone is not enough.
+        Returns True when the chunk was reachable.
+        """
+        json_data = copy.deepcopy(GQLOperations.PlaybackAccessToken)
+        json_data["variables"] = {
+            "login": streamer.username,
+            "isLive": True,
+            "isVod": False,
+            "vodID": "",
+            "playerType": "site",
+            "platform": "web",
+        }
+        response = self.post_gql_request(json_data)
+        try:
+            token = response["data"]["streamPlaybackAccessToken"]
+            signature, value = token["signature"], token["value"]
+        except (KeyError, TypeError):
+            logger.debug(
+                f"No playback token for {streamer.username}.%s",
+                _graphql_error_details(response),
+            )
+            return False
+        if not signature or not value:
+            return False
+
+        headers = {"User-Agent": self.user_agent}
+        playlist = requests.get(
+            f"https://usher.ttvnw.net/api/channel/hls/{streamer.username}.m3u8",
+            params={"sig": signature, "token": value},
+            headers=headers,
+            timeout=20,
+        )
+        variant = _last_playlist_url(playlist.text) if playlist.status_code == 200 else None
+        if variant is None:
+            logger.debug(
+                f"Stream playlist for {streamer.username} failed (HTTP {playlist.status_code})"
+            )
+            return False
+        chunks = requests.get(variant, headers=headers, timeout=20)
+        chunk = _last_playlist_url(chunks.text) if chunks.status_code == 200 else None
+        if chunk is None:
+            logger.debug(
+                f"Stream chunk list for {streamer.username} failed (HTTP {chunks.status_code})"
+            )
+            return False
+        head = requests.head(chunk, headers=headers, timeout=20)
+        logger.debug(
+            f"Loaded stream chunk for {streamer.username} - Status code: {head.status_code}"
+        )
+        return head.status_code == 200
+
     def send_minute_watched_events(self, streamers, priority, chunk_size=3):
         last_drop_streamer = None
         last_targets = {}
@@ -967,6 +1032,12 @@ class Twitch(object):
                     next_iteration = time.time() + 60 / len(streamers_watching)
 
                     try:
+                        try:
+                            self.load_stream_segment(streamers[index])
+                        except requests.exceptions.RequestException as e:
+                            logger.debug(
+                                f"Could not load the stream of {streamers[index].username}: {e}"
+                            )
                         response = requests.post(
                             streamers[index].stream.spade_url,
                             data=streamers[index].stream.encode_payload(),

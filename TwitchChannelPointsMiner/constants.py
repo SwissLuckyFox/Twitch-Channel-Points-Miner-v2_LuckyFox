@@ -42,6 +42,17 @@ class GQLOperations:
             }
         },
     }
+    # Token for the stream's video playlist; Twitch only counts drop progress for
+    # viewers that actually load the stream (fix for the 2024/5 API change).
+    PlaybackAccessToken = {
+        "operationName": "PlaybackAccessToken",
+        "extensions": {
+            "persistedQuery": {
+                "version": 1,
+                "sha256Hash": "ed230aa1e33e07eebb8928504583da78a5173989fadfb1ac94be06a04f3cdbe9",
+            }
+        },
+    }
     VideoPlayerStreamInfoOverlayChannel = {
         "operationName": "VideoPlayerStreamInfoOverlayChannel",
         "extensions": {
