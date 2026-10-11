@@ -261,6 +261,122 @@ class DropScanSummaryTests(unittest.TestCase):
         self.assertIn("any live channel in the category", message)
         self.assertIn("Checking which participating channels are live", message)
 
+    def test_live_channel_scan_without_drops_names_its_sources(self):
+        message = twitch_module.describe_drop_scan(
+            [],
+            {
+                "listed": 0,
+                "checked": 0,
+                "in_progress": 0,
+                "probed_channels": 4,
+                "categories": ["Rust"],
+            },
+        )
+        self.assertEqual(
+            message,
+            "Scanned for drops: no watch-time drops found "
+            "(0 started in your inventory; 4 live channel(s) checked in Rust)",
+        )
+
+    def test_scan_without_live_channels_explains_why(self):
+        message = twitch_module.describe_drop_scan(
+            [], {"listed": 0, "checked": 0, "probed_channels": 0, "categories": []}
+        )
+        self.assertIn("none could be checked right now", message)
+
+    def test_found_drop_mentions_sources(self):
+        campaign = Campaign(campaign_data([drop_data()]))
+        message = twitch_module.describe_drop_scan(
+            [campaign],
+            {"listed": 1, "checked": 1, "in_progress": 0, "probed_channels": 2,
+             "categories": ["Alien: Isolation"]},
+        )
+        self.assertIn("found 1 campaign(s)", message)
+        self.assertIn("sources: 0 started in your inventory; 2 live channel(s)", message)
+
+
+def available_drops_entry(campaign_id="campaign-1", game_id="12345"):
+    data = campaign_data([drop_data()])
+    data["id"] = campaign_id
+    data["game"] = {"id": game_id, "name": "Alien: Isolation", "displayName": "Alien: Isolation"}
+    for key in ("status", "allow", "self", "startAt"):
+        data.pop(key)
+    return data
+
+
+class AvailableDropsCampaignTests(unittest.TestCase):
+    def test_builds_campaign_restricted_to_the_channel_it_was_found_on(self):
+        data = twitch_module._campaign_from_available_drops(
+            available_drops_entry(), {"id": "42", "name": "streamer"}
+        )
+        campaign = Campaign(data)
+        self.assertEqual(campaign.channels, ["42"])
+        self.assertEqual(campaign.game["id"], "12345")
+        self.assertEqual([d.id for d in campaign.drops], ["drop-1"])
+        self.assertTrue(campaign.dt_match)
+
+    def test_entries_without_game_or_drops_are_ignored(self):
+        no_game = available_drops_entry()
+        no_game["game"] = None
+        no_drops = available_drops_entry()
+        no_drops["timeBasedDrops"] = []
+        self.assertIsNone(twitch_module._campaign_from_available_drops(no_game, {"id": "1"}))
+        self.assertIsNone(twitch_module._campaign_from_available_drops(no_drops, {"id": "1"}))
+
+
+class CampaignDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.twitch = object.__new__(Twitch)
+        self.twitch.running = True
+
+    def _live_streamer(self, name, channel_id):
+        streamer = Streamer(name)
+        streamer.channel_id = channel_id
+        streamer.settings = StreamerSettings(claim_drops=True)
+        streamer.is_online = True
+        streamer.stream.game = {"id": "12345", "name": "Alien: Isolation", "displayName": "Alien: Isolation"}
+        streamer.stream.drops_tags = True
+        return streamer
+
+    def test_discovers_campaigns_on_own_and_directory_channels(self):
+        own = self._live_streamer("mine", "1")
+        responses = [
+            {"data": {"channel": {"viewerDropCampaigns": [available_drops_entry()]}}},
+            {"data": {"channel": {"viewerDropCampaigns": [available_drops_entry()]}}},
+            {"data": {"channel": {"viewerDropCampaigns": None}}},
+        ]
+        with patch.object(Twitch, "post_gql_request", return_value=responses) as post, patch.object(
+            Twitch,
+            "get_drops_enabled_channels",
+            return_value=[("1", "mine"), ("2", "other"), ("3", "third")],
+        ):
+            discovered, probed, categories = self.twitch._Twitch__discover_campaigns([own], [])
+
+        self.assertEqual(probed, 3)
+        self.assertEqual(categories, ["Alien: Isolation"])
+        self.assertEqual(len(discovered), 1)
+        self.assertEqual(
+            [c["id"] for c in discovered[0]["allow"]["channels"]], ["1", "2"]
+        )
+        sent = post.call_args.args[0]
+        self.assertEqual([op["variables"] for op in sent], [{"channelID": "1"}, {"channelID": "2"}, {"channelID": "3"}])
+        self.assertEqual(
+            sent[0]["extensions"]["persistedQuery"]["sha256Hash"],
+            GQLOperations.FallbackHashes["DropsHighlightService_AvailableDrops"],
+        )
+
+    def test_known_campaigns_are_not_rediscovered(self):
+        own = self._live_streamer("mine", "1")
+        responses = [{"data": {"channel": {"viewerDropCampaigns": [available_drops_entry()]}}}]
+        with patch.object(Twitch, "post_gql_request", return_value=responses), patch.object(
+            Twitch, "get_drops_enabled_channels", return_value=[]
+        ):
+            discovered, probed, _ = self.twitch._Twitch__discover_campaigns(
+                [own], [campaign_data([drop_data()])]
+            )
+        self.assertEqual(discovered, [])
+        self.assertEqual(probed, 1)
+
 
 class PersistedQueryFallbackTests(unittest.TestCase):
     def setUp(self):

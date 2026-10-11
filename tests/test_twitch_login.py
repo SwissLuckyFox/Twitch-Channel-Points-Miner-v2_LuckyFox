@@ -153,27 +153,6 @@ class TwitchLoginTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, r"HTTP 400 \(invalid client\)"):
                 login.login_flow()
 
-    def test_use_web_device_id_adopts_twitch_unique_id_cookie(self):
-        login = make_login()
-        login.session.headers = {}
-        login.session.cookies = [Mock(value="webdeviceid123")]
-        login.session.cookies[0].name = "unique_id"
-
-        self.assertTrue(login.use_web_device_id("https://www.twitch.tv"))
-
-        self.assertEqual(login.device_id, "webdeviceid123")
-        self.assertEqual(login.session.headers["X-Device-Id"], "webdeviceid123")
-
-    def test_use_web_device_id_prefers_saved_cookie(self):
-        login = make_login()
-        login.session.headers = {}
-        login.cookies = [{"name": "unique_id", "value": "saveddevice"}]
-
-        self.assertTrue(login.use_web_device_id("https://www.twitch.tv"))
-
-        login.session.get.assert_not_called()
-        self.assertEqual(login.device_id, "saveddevice")
-
 
 if __name__ == "__main__":
     unittest.main()

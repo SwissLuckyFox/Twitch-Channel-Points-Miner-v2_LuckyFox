@@ -95,7 +95,7 @@ No browser needed. [#41](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner
 - Auto claiming [game drops](https://help.twitch.tv/s/article/mission-based-drops) from the Twitch inventory [#21](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/21) ✔️
 - Discovering campaign channels with unclaimed timed drops, even when they are not in the configured streamer list ✔️
 - Finding live drops-enabled channels for "watch any participating channel" campaigns (e.g. badges/emotes), watching one until the drop is earned and then returning to the normal routine. "Subscribe to Redeem" drops are ignored ✔️
-  - Twitch only lists drop campaigns for its Android app, so the first drop scan shows a second one-time activation code (`Drops login ...`, also sent to Telegram). The token is saved as `cookies/<username>_drops.pkl`.
+  - Twitch hides its campaign list from app clients, so campaigns are found hourly through your inventory and through live channels: your live streamers plus live drops-enabled channels of the relevant categories. A drop can only be found while a participating channel is live.
 - Placing a bet / making a prediction with your channel points [#41](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/41) ([@lay295](https://github.com/lay295)) ✔️
 - Switchable analytics chart that shows the progress of your points with various annotations [#96](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/96) ✔️
 - Joining the IRC Chat to increase the watch time and get StreamElements points [#47](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/47) ✔️

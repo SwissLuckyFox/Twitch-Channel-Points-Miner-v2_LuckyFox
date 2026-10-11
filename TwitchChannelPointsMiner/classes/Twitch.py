@@ -37,8 +37,6 @@ from TwitchChannelPointsMiner.classes.TwitchLogin import TwitchLogin
 from TwitchChannelPointsMiner.constants import (
     CLIENT_ID,
     CLIENT_VERSION,
-    DROPS_CLIENT_ID,
-    DROPS_CLIENT_URL,
     GQLOperations,
     URL,
     USER_AGENTS,
@@ -83,7 +81,7 @@ def _graphql_error_details(response):
 
 # Operation name -> persisted query hash that replaced a stale primary hash.
 _preferred_hashes = {}
-# Drops operation name -> (client, request variant) that last returned data.
+# Drops operation name -> request variant ("default"/"alternate") that last returned data.
 _preferred_drops_variants = {}
 
 
@@ -180,6 +178,72 @@ def _game_slug(name):
     return re.sub(r"-{2,}", "-", slug.strip("-"))
 
 
+def _campaign_from_available_drops(data, channel_entry, linked=True):
+    """
+    Campaign data (same shape as DropCampaignDetails) built from one entry of a channel's
+    AvailableDrops answer, or None if it has no game or no usable time-based drops.
+    The channel it was found on becomes the allow-list, so the miner watches it.
+    """
+    if not isinstance(data, dict) or not data.get("id") or not data.get("endAt"):
+        return None
+    game = data.get("game")
+    if not isinstance(game, dict) or not game.get("id"):
+        return None
+    timed_drops = []
+    for drop in data.get("timeBasedDrops") or []:
+        if not isinstance(drop, dict) or not all(
+            drop.get(key) for key in ("id", "name", "startAt", "endAt")
+        ):
+            continue
+        timed_drops.append(
+            {
+                "id": drop["id"],
+                "name": drop["name"],
+                "startAt": drop["startAt"],
+                "endAt": drop["endAt"],
+                "requiredMinutesWatched": drop.get("requiredMinutesWatched"),
+                "requiredSubs": drop.get("requiredSubs"),
+                "benefitEdges": [
+                    edge
+                    for edge in drop.get("benefitEdges") or []
+                    if isinstance(edge, dict) and isinstance(edge.get("benefit"), dict)
+                ],
+            }
+        )
+    if not timed_drops:
+        return None
+    game_name = game.get("displayName") or game.get("name")
+    return {
+        "id": data["id"],
+        "name": data.get("name") or data["id"],
+        "game": {
+            "id": str(game["id"]),
+            "name": game.get("name") or game_name,
+            "displayName": game_name,
+            "slug": game.get("slug"),
+        },
+        "status": "ACTIVE",
+        "self": {"isAccountConnected": linked},
+        "startAt": min(drop["startAt"] for drop in timed_drops),
+        "endAt": data["endAt"],
+        "allow": {"channels": [dict(channel_entry)], "isEnabled": True},
+        "timeBasedDrops": timed_drops,
+    }
+
+
+def _scan_sources(stats):
+    """Where the hourly scan looked, e.g. '1 started in your inventory; 12 live channel(s) checked in Rust'."""
+    if "probed_channels" not in stats:
+        return None
+    text = f"{stats['probed_channels']} live channel(s) checked"
+    categories = stats.get("categories") or []
+    if categories:
+        text += " in " + ", ".join(categories[:5])
+        if len(categories) > 5:
+            text += f" +{len(categories) - 5} more"
+    return f"{stats.get('in_progress', 0)} started in your inventory; {text}"
+
+
 WATCH_REASONS = {
     Priority.STREAK: "watch streak",
     Priority.DROPS: "drop",
@@ -235,6 +299,14 @@ def describe_drop_scan(active_campaigns, stats):
     """Summary of an hourly drop-campaign scan; stats holds the skip counters."""
     listed = stats.get("listed", stats.get("checked", 0))
     checked = stats.get("checked", 0)
+    sources = _scan_sources(stats)
+    if listed == 0 and sources is not None:
+        hint = (
+            ""
+            if stats["probed_channels"]
+            else ". Drops are found through live channels, so none could be checked right now"
+        )
+        return f"Scanned for drops: no watch-time drops found ({sources}){hint}"
     if listed == 0:
         return (
             "Scanned for drops: Twitch returned no active drop campaigns "
@@ -258,6 +330,8 @@ def describe_drop_scan(active_campaigns, stats):
     details = f"checked {checked} campaigns"
     if skipped:
         details += "; " + ", ".join(skipped)
+    if sources is not None:
+        details += f"; sources: {sources}"
 
     if not active_campaigns:
         return f"Scanned for drops: no new watch-time drops found ({details})"
@@ -294,7 +368,6 @@ class Twitch(object):
         "client_version",
         "client_version_loaded",
         "twilight_build_id_pattern",
-        "drops_login",
     ]
 
     def __init__(self, username, user_agent, password=None):
@@ -315,7 +388,6 @@ class Twitch(object):
         )
         self.twitch_login.device_id = self.device_id
         self.twitch_login.session.headers["X-Device-Id"] = self.device_id
-        self.drops_login = None
         self.running = True
 
     def login(self):
@@ -325,76 +397,6 @@ class Twitch(object):
         else:
             self.twitch_login.load_cookies(self.cookies_file)
             self.twitch_login.set_token(self.twitch_login.get_auth_token())
-
-    def __drops_cookies_file(self):
-        return re.sub(r"\.pkl$", "_drops.pkl", self.cookies_file)
-
-    def ensure_drops_login(self):
-        """
-        Twitch only hands the drop campaign list to its Android app client, so drops
-        requests use a separate token for that client. The first time this shows a
-        second activation code (also sent to Telegram); the token is then saved.
-        """
-        if getattr(self, "drops_login", None) is not None:
-            return True
-
-        login = TwitchLogin(
-            DROPS_CLIENT_ID,
-            self.twitch_login.username,
-            USER_AGENTS["Android"]["APP"],
-            None,
-        )
-        login.set_device_id(self.device_id)
-        login.oauth_profile = {
-            "origin": DROPS_CLIENT_URL,
-            "referer": DROPS_CLIENT_URL,
-            "user_agent": USER_AGENTS["Android"]["APP"],
-            "scopes": "",
-            "label": "Drops login (one-time, Twitch Android app): ",
-            "extra": {"emoji": ":key:", "event": Events.DROP_SCAN},
-            "keep_waiting": lambda: self.running,
-        }
-        cookies_file = self.__drops_cookies_file()
-        try:
-            if os.path.isfile(cookies_file):
-                login.load_cookies(cookies_file)
-                login.use_web_device_id(DROPS_CLIENT_URL)
-                login.set_token(login.get_auth_token())
-            else:
-                logger.info(
-                    "Drop scan needs a second, one-time Twitch login: Twitch only lists "
-                    "drop campaigns for its Android app. Enter the code below at the same "
-                    "activation page as the first login.",
-                    extra={"emoji": ":key:", "event": Events.DROP_SCAN},
-                )
-                login.use_web_device_id(DROPS_CLIENT_URL)
-                if not login.login_flow():
-                    return False
-                login.save_cookies(cookies_file)
-                logger.info(
-                    "Drops login done, the token is saved for future starts.",
-                    extra={"emoji": ":key:", "event": Events.DROP_SCAN},
-                )
-        except Exception as error:
-            logger.warning(
-                "Drops login failed (%s). Drop scans use the normal login until the next try.",
-                error,
-            )
-            return False
-        if not login.get_auth_token():
-            return False
-        self.drops_login = login
-        return True
-
-    def __reset_drops_login(self):
-        self.drops_login = None
-        try:
-            os.remove(self.__drops_cookies_file())
-        except OSError:
-            pass
-        logger.warning(
-            "Twitch rejected the saved drops login. A new activation code will be shown on the next drop scan."
-        )
 
     # === STREAMER / STREAM / INFO === #
     def update_stream(self, streamer):
@@ -643,13 +645,13 @@ class Twitch(object):
             )
             self.__chuncked_sleep(random_sleep * 60, chunk_size=chunk_size)
 
-    def post_gql_request(self, json_data, login=None):
+    def post_gql_request(self, json_data):
         json_data = _apply_hashes(json_data, _preferred_hashes)
-        response = self.__send_gql_request(json_data, login)
+        response = self.__send_gql_request(json_data)
         fallback_data = _with_fallback_hashes(json_data, response)
         if fallback_data is not None:
             logger.debug("Retrying GraphQL request with fallback persisted query hash")
-            fallback_response = self.__send_gql_request(fallback_data, login)
+            fallback_response = self.__send_gql_request(fallback_data)
             responses = (
                 fallback_response
                 if isinstance(fallback_response, list)
@@ -667,26 +669,15 @@ class Twitch(object):
                 return fallback_response
         return response
 
-    def __send_gql_request(self, json_data, login=None):
-        if login is None:
-            headers = {
-                "Authorization": f"OAuth {self.twitch_login.get_auth_token()}",
-                "Client-Id": CLIENT_ID,
-                "Client-Session-Id": self.client_session,
-                "Client-Version": self.update_client_version(),
-                "User-Agent": self.user_agent,
-                "X-Device-Id": self.device_id,
-            }
-        else:
-            headers = {
-                "Authorization": f"OAuth {login.get_auth_token()}",
-                "Client-Id": login.client_id,
-                "Client-Session-Id": self.client_session,
-                "Origin": DROPS_CLIENT_URL,
-                "Referer": DROPS_CLIENT_URL,
-                "User-Agent": USER_AGENTS["Android"]["APP"],
-                "X-Device-Id": login.device_id,
-            }
+    def __send_gql_request(self, json_data):
+        headers = {
+            "Authorization": f"OAuth {self.twitch_login.get_auth_token()}",
+            "Client-Id": CLIENT_ID,
+            "Client-Session-Id": self.client_session,
+            "Client-Version": self.update_client_version(),
+            "User-Agent": self.user_agent,
+            "X-Device-Id": self.device_id,
+        }
         try:
             response = requests.post(
                 GQLOperations.url,
@@ -1133,36 +1124,26 @@ class Twitch(object):
                 node = node.get(key)
             return node if isinstance(node, expected_type) else None
 
-        alternate = _alternate_drops_query(operation)
-        attempts = []
-        drops_login = getattr(self, "drops_login", None)
-        for login, client in ((drops_login, "android"), (None, "tv")):
-            if client == "android" and login is None:
-                continue
-            attempts.append(((client, "default"), operation, login))
-            attempts.append(((client, "alternate"), alternate, login))
+        attempts = [("default", operation), ("alternate", _alternate_drops_query(operation))]
         preferred = _preferred_drops_variants.get(name)
         attempts.sort(key=lambda attempt: attempt[0] != preferred)
 
         problems = []
-        for key, query, login in attempts:
-            response = self.post_gql_request(query, login=login)
+        for key, query in attempts:
+            response = self.post_gql_request(query)
             value = extract(response)
             if value is not None:
                 if key != preferred:
                     _preferred_drops_variants[name] = key
                     if problems:
                         logger.info(
-                            "Drop scan: %s now uses the %s client with the %s request (before: %s)",
+                            "Drop scan: %s now uses the %s request (before: %s)",
                             name,
-                            key[0],
-                            key[1],
+                            key,
                             "; ".join(problems),
                         )
                 return value, None
-            if login is not None and isinstance(response, dict) and response.get("status") == 401:
-                self.__reset_drops_login()
-            problems.append(f"{key[0]}/{key[1]}: {_describe_response(response, path)}")
+            problems.append(f"{key}: {_describe_response(response, path)}")
         return None, "; ".join(problems)
 
     def __get_inventory(self):
@@ -1181,7 +1162,9 @@ class Twitch(object):
             list,
         )
         if campaigns is None:
-            logger.warning(
+            # Expected since Twitch gated the dashboard (~Sep 2026); drops are then
+            # discovered through live channels instead.
+            logger.debug(
                 "Drop scan: Twitch did not return the drop campaign list (%s)", problem
             )
             return []
@@ -1203,10 +1186,7 @@ class Twitch(object):
                     "channelLogin": f"{self.twitch_login.get_user_id()}",
                 }
 
-            drops_login = getattr(self, "drops_login", None)
-            response = self.post_gql_request(json_data, login=drops_login)
-            if drops_login is not None and not isinstance(response, list):
-                response = self.post_gql_request(json_data)
+            response = self.post_gql_request(json_data)
             if not isinstance(response, list):
                 logger.warning(
                     "Drop scan: could not load details for %s campaign(s).%s",
@@ -1384,6 +1364,110 @@ class Twitch(object):
             extra={"emoji": ":gift:"},
         )
 
+    def __get_available_drop_campaigns(self, channel_ids):
+        """channel id -> campaigns Twitch offers on that live channel (AvailableDrops)."""
+        result = {}
+        for chunk in create_chunks(list(channel_ids), 20):
+            json_data = []
+            for channel_id in chunk:
+                operation = copy.deepcopy(GQLOperations.DropsHighlightService_AvailableDrops)
+                # TwitchDropsMiner's hash returns the full drop data (rewards, minutes, dates).
+                operation["extensions"]["persistedQuery"]["sha256Hash"] = (
+                    GQLOperations.FallbackHashes["DropsHighlightService_AvailableDrops"]
+                )
+                operation["variables"] = {"channelID": str(channel_id)}
+                json_data.append(operation)
+            response = self.post_gql_request(json_data)
+            if not isinstance(response, list):
+                logger.debug(
+                    "Drop scan: AvailableDrops failed for %s channel(s).%s",
+                    len(chunk),
+                    _graphql_error_details(response),
+                )
+                continue
+            for channel_id, item in zip(chunk, response):
+                try:
+                    campaigns = item["data"]["channel"]["viewerDropCampaigns"]
+                except (KeyError, TypeError):
+                    continue
+                result[channel_id] = [c for c in campaigns or [] if isinstance(c, dict)]
+        return result
+
+    def __discover_campaigns(self, streamers, known_campaigns):
+        """
+        Twitch no longer gives app clients the campaign list (ViewerDropsDashboard and
+        DropCampaignDetails return null since ~Sep 2026), but the per-channel AvailableDrops
+        query still works. Probe the user's live channels plus live drops-enabled channels
+        of the relevant categories (games of known campaigns and of the user's live streams
+        with drops enabled) for campaigns that are not known yet.
+        Returns (campaign data list, number of probed channels, category names).
+        """
+        channels = {}
+        games = {}
+        for data in known_campaigns:
+            game = data.get("game")
+            if isinstance(game, dict) and game.get("id"):
+                games[str(game["id"])] = game
+        own_channels = set()
+        for streamer in streamers:
+            if (
+                streamer.is_online is True
+                and streamer.settings is not None
+                and streamer.settings.claim_drops is True
+                and streamer.channel_id
+            ):
+                channel_id = str(streamer.channel_id)
+                channels[channel_id] = streamer.username
+                own_channels.add(channel_id)
+                game = streamer.stream.game
+                if streamer.stream.drops_tags and isinstance(game, dict) and game.get("id"):
+                    games.setdefault(str(game["id"]), game)
+        for game in games.values():
+            if not self.running:
+                break
+            for channel_id, login in self.get_drops_enabled_channels(game):
+                channels.setdefault(channel_id, login)
+
+        known_ids = {data.get("id") for data in known_campaigns}
+        linked_by_game = {
+            str(data["game"]["id"]): (data.get("self") or {}).get("isAccountConnected")
+            is not False
+            for data in known_campaigns
+            if isinstance(data.get("game"), dict) and data["game"].get("id")
+        }
+        discovered = {}
+        for channel_id, offered in self.__get_available_drop_campaigns(channels).items():
+            entry = {"id": channel_id, "name": channels[channel_id]}
+            for data in offered:
+                campaign_id = data.get("id")
+                if not campaign_id or campaign_id in known_ids:
+                    continue
+                if campaign_id in discovered:
+                    allowed = discovered[campaign_id]["allow"]["channels"]
+                    extra = [c for c in allowed if c["id"] not in own_channels]
+                    if (
+                        channel_id in own_channels
+                        or len(extra) < DIRECTORY_CHANNELS_PER_CAMPAIGN
+                    ):
+                        allowed.append(entry)
+                    continue
+                game = data.get("game")
+                game_id = str(game.get("id")) if isinstance(game, dict) else None
+                campaign = _campaign_from_available_drops(
+                    data, entry, linked_by_game.get(game_id, True)
+                )
+                if campaign is not None:
+                    discovered[campaign_id] = campaign
+
+        categories = sorted(
+            {
+                game.get("displayName") or game.get("name")
+                for game in games.values()
+                if game.get("displayName") or game.get("name")
+            }
+        )
+        return list(discovered.values()), len(channels), categories
+
     def sync_campaigns(self, streamers, chunk_size=3):
         campaigns_update = 0
         campaigns = []
@@ -1400,24 +1484,52 @@ class Twitch(object):
                     or ((time.time() - campaigns_update) / 60) > 60
                 ):
                     campaigns_update = time.time()
-                    self.ensure_drops_login()
+                    # The dashboard is kept in case Twitch serves it again; since ~Sep 2026
+                    # it returns null for app clients, so campaigns come from the inventory
+                    # (already started) and from live channels (AvailableDrops).
+                    dashboard = self.__get_drops_dashboard(status="ACTIVE")
+                    campaigns_details = (
+                        self.__get_campaigns_details(dashboard) if dashboard else []
+                    )
+                    inventory = self.__get_inventory() or {}
+                    in_progress = [
+                        c
+                        for c in (inventory.get("dropCampaignsInProgress") or [])
+                        if isinstance(c, dict) and c.get("id")
+                    ]
+                    known = {c["id"]: c for c in in_progress}
+                    known.update(
+                        {
+                            c["id"]: c
+                            for c in campaigns_details
+                            if isinstance(c, dict) and c.get("id")
+                        }
+                    )
+                    discovered, probed, categories = self.__discover_campaigns(
+                        streamers, list(known.values())
+                    )
                     if not self.running:
                         break
-                    # Get full details from current ACTIVE campaigns
-                    # Use dashboard so we can explore new drops not currently active in our Inventory
-                    dashboard = self.__get_drops_dashboard(status="ACTIVE")
-                    campaigns_details = self.__get_campaigns_details(dashboard)
+                    campaigns_data = list(known.values()) + discovered
                     campaigns = []
                     scan_stats = {
-                        "listed": len(dashboard),
-                        "checked": len(campaigns_details),
+                        "listed": len(campaigns_data),
+                        "checked": len(campaigns_data),
                         "no_watch_drops": 0,
                         "not_linked": 0,
+                        "in_progress": len(in_progress),
+                        "probed_channels": probed,
+                        "categories": categories,
                     }
 
                     # Going to clear array and structure. Remove all the timeBasedDrops expired or not started yet
-                    for index in range(0, len(campaigns_details)):
-                        campaign = Campaign(campaigns_details[index])
+                    for data in campaigns_data:
+                        try:
+                            campaign = Campaign(data)
+                        except (KeyError, TypeError, ValueError) as error:
+                            logger.debug(f"Skipping unreadable drop campaign: {error!r}")
+                            scan_stats["no_watch_drops"] += 1
+                            continue
                         if campaign.dt_match is True:
                             # Remove all the drops already claimed or with dt not matching
                             campaign.clear_drops()

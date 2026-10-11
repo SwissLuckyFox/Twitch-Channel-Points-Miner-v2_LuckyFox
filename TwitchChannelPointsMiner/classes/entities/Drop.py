@@ -63,8 +63,10 @@ class Drop(object):
         self.is_printable = False
         self.percentage_progress = 0
 
-        self.end_at = datetime.strptime(data["endAt"], "%Y-%m-%dT%H:%M:%SZ")
-        self.start_at = datetime.strptime(data["startAt"], "%Y-%m-%dT%H:%M:%SZ")
+        self.end_at = parse_twitch_datetime(data["endAt"])
+        self.start_at = parse_twitch_datetime(data["startAt"])
+        if self.end_at is None or self.start_at is None:
+            raise ValueError(f"Drop {self.id} has no valid start/end date")
         self.dt_match = self.start_at < datetime.now() < self.end_at
 
     @property

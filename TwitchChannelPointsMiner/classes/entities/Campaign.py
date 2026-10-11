@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from TwitchChannelPointsMiner.classes.entities.Drop import Drop
+from TwitchChannelPointsMiner.classes.entities.Drop import Drop, parse_twitch_datetime
 from TwitchChannelPointsMiner.classes.Settings import Settings
 
 
@@ -23,7 +23,7 @@ class Campaign(object):
         self.id = dict["id"]
         self.game = dict["game"]
         self.name = dict["name"]
-        self.status = dict["status"]
+        self.status = dict.get("status") or "ACTIVE"
         allow = dict.get("allow") or {}
         allowed_channels = allow.get("channels")
         self.channels = (
@@ -35,8 +35,10 @@ class Campaign(object):
         self_data = dict.get("self") or {}
         self.account_connected = self_data.get("isAccountConnected") is not False
 
-        self.end_at = datetime.strptime(dict["endAt"], "%Y-%m-%dT%H:%M:%SZ")
-        self.start_at = datetime.strptime(dict["startAt"], "%Y-%m-%dT%H:%M:%SZ")
+        self.end_at = parse_twitch_datetime(dict["endAt"])
+        self.start_at = parse_twitch_datetime(dict["startAt"])
+        if self.end_at is None or self.start_at is None:
+            raise ValueError(f"Campaign {self.id} has no valid start/end date")
         self.dt_match = self.start_at < datetime.now() < self.end_at
 
         self.drops = [
