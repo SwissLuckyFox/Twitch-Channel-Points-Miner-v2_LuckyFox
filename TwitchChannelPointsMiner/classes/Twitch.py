@@ -194,14 +194,29 @@ def describe_watch_change(previous, current):
 
 def describe_drop_scan(active_campaigns, stats):
     """Summary of an hourly drop-campaign scan; stats holds the skip counters."""
+    listed = stats.get("listed", stats.get("checked", 0))
+    checked = stats.get("checked", 0)
+    if listed == 0:
+        return (
+            "Scanned for drops: Twitch returned no active drop campaigns "
+            "(the request probably failed, see the warning above)"
+        )
+    if checked == 0:
+        return (
+            f"Scanned for drops: Twitch listed {listed} active campaigns but their "
+            "details could not be loaded (see the warning above)"
+        )
+
     skipped = []
+    if listed > checked:
+        skipped.append(f"{listed - checked} could not be loaded")
     if stats.get("already_earned"):
         skipped.append(f"{stats['already_earned']} already earned")
     if stats.get("no_watch_drops"):
         skipped.append(f"{stats['no_watch_drops']} without watch-time drops")
     if stats.get("not_linked"):
         skipped.append(f"{stats['not_linked']} need a linked game account")
-    details = f"checked {stats.get('checked', 0)} campaigns"
+    details = f"checked {checked} campaigns"
     if skipped:
         details += "; " + ", ".join(skipped)
 
@@ -999,9 +1014,9 @@ class Twitch(object):
             campaigns = None
 
         if not isinstance(campaigns, list):
-            logger.debug(
-                "Twitch returned no drop campaigns.%s",
-                _graphql_error_details(response),
+            logger.warning(
+                "Drop scan: Twitch did not return the drop campaign list.%s",
+                _graphql_error_details(response) or " (empty response)",
             )
             return []
 
@@ -1024,12 +1039,20 @@ class Twitch(object):
 
             response = self.post_gql_request(json_data)
             if not isinstance(response, list):
-                logger.debug("Unexpected campaigns response format, skipping chunk")
+                logger.warning(
+                    "Drop scan: could not load details for %s campaign(s).%s",
+                    len(chunk),
+                    _graphql_error_details(response) or " (unexpected response)",
+                )
                 continue
             for r in response:
                 try:
                     drop_campaign = r["data"]["user"]["dropCampaign"]
                 except (KeyError, TypeError):
+                    logger.debug(
+                        "Drop scan: campaign details missing.%s",
+                        _graphql_error_details(r),
+                    )
                     continue
                 if drop_campaign is not None:
                     result.append(drop_campaign)
@@ -1210,11 +1233,11 @@ class Twitch(object):
                     campaigns_update = time.time()
                     # Get full details from current ACTIVE campaigns
                     # Use dashboard so we can explore new drops not currently active in our Inventory
-                    campaigns_details = self.__get_campaigns_details(
-                        self.__get_drops_dashboard(status="ACTIVE")
-                    )
+                    dashboard = self.__get_drops_dashboard(status="ACTIVE")
+                    campaigns_details = self.__get_campaigns_details(dashboard)
                     campaigns = []
                     scan_stats = {
+                        "listed": len(dashboard),
                         "checked": len(campaigns_details),
                         "no_watch_drops": 0,
                         "not_linked": 0,

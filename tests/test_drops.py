@@ -244,6 +244,14 @@ class DropScanSummaryTests(unittest.TestCase):
         self.assertIn("2 already earned", message)
         self.assertIn("3 without watch-time drops", message)
 
+    def test_empty_campaign_list_is_reported_as_failed_request(self):
+        message = twitch_module.describe_drop_scan([], {"listed": 0, "checked": 0})
+        self.assertIn("Twitch returned no active drop campaigns", message)
+
+    def test_missing_details_are_reported(self):
+        message = twitch_module.describe_drop_scan([], {"listed": 7, "checked": 0})
+        self.assertIn("listed 7 active campaigns but their details could not be loaded", message)
+
     def test_found_drop_lists_category_and_reward(self):
         campaign = Campaign(campaign_data([drop_data()]))
         message = twitch_module.describe_drop_scan([campaign], {"checked": 1})
