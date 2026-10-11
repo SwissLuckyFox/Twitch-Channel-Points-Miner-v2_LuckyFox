@@ -75,6 +75,8 @@ def optional_telegram():
             Events.GAIN_FOR_CLAIM,
             Events.GAIN_FOR_RAID,
             Events.BONUS_CLAIM,
+            Events.CHAT_JOIN,
+            Events.WATCH_TARGET,
         ],
         disable_notification=True,
     )

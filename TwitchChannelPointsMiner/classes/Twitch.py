@@ -141,6 +141,57 @@ def _game_slug(name):
     return re.sub(r"-{2,}", "-", slug.strip("-"))
 
 
+WATCH_REASONS = {
+    Priority.STREAK: "watch streak",
+    Priority.DROPS: "drop",
+    Priority.SUBSCRIBED: "subscription points bonus",
+    Priority.ORDER: "streamer list priority",
+    Priority.POINTS_ASCENDING: "fewest channel points",
+    Priority.POINTS_DESCEDING: "most channel points",
+}
+
+
+def _leave_reason(streamer, previous_reason):
+    if streamer.is_online is not True:
+        return "went offline"
+    if previous_reason == WATCH_REASONS[Priority.STREAK]:
+        if streamer.stream.watch_streak_missing is False:
+            return "watch streak collected"
+        if streamer.stream.minute_watched >= 7:
+            return "watched long enough for the watch streak"
+    if previous_reason == WATCH_REASONS[Priority.DROPS] and not streamer.drops_condition():
+        return "drop earned"
+    return "a higher priority channel took the slot"
+
+
+def describe_watch_change(previous, current):
+    """
+    previous/current map username -> (streamer, reason).
+    Returns a human readable summary when the mined channels or reasons change.
+    """
+    if {name: reason for name, (_, reason) in previous.items()} == {
+        name: reason for name, (_, reason) in current.items()
+    }:
+        return None
+
+    lines = []
+    for name, (streamer, reason) in previous.items():
+        if name not in current:
+            lines.append(f"Stopped mining {name}: {_leave_reason(streamer, reason)}")
+    for name, (_, reason) in current.items():
+        if name not in previous:
+            lines.append(f"Started mining {name}: {reason}")
+        elif previous[name][1] != reason:
+            lines.append(f"Still mining {name}, now for: {reason} (was: {previous[name][1]})")
+
+    if current:
+        summary = ", ".join(f"{name} ({reason})" for name, (_, reason) in current.items())
+        lines.append(f"Mining now: {summary}")
+    else:
+        lines.append("Mining now: nothing (no streamer online)")
+    return "\n".join(lines)
+
+
 class Twitch(object):
     __slots__ = [
         "cookies_file",
@@ -523,8 +574,18 @@ class Twitch(object):
             )
         return current
 
+    def __log_watch_targets(self, previous, current):
+        """Report which channels are mined and why, whenever that changes."""
+        message = describe_watch_change(previous, current)
+        if message is not None:
+            logger.info(
+                message, extra={"emoji": ":pick:", "event": Events.WATCH_TARGET}
+            )
+        return current
+
     def send_minute_watched_events(self, streamers, priority, chunk_size=3):
         last_drop_streamer = None
+        last_targets = {}
         while self.running:
             drop_streamer = None
             try:
@@ -545,14 +606,18 @@ class Twitch(object):
                         self.check_streamer_online(streamers[index])
 
                 streamers_watching = []
+                reasons = {}
                 for prior in priority:
                     if prior == Priority.ORDER and len(streamers_watching) < 2:
                         # Preserve the configured order without selecting a streamer twice.
-                        streamers_watching += [
+                        picked = [
                             index
                             for index in streamers_index
                             if index not in streamers_watching
                         ][: 2 - len(streamers_watching)]
+                        streamers_watching += picked
+                        for index in picked:
+                            reasons.setdefault(index, WATCH_REASONS[Priority.ORDER])
 
                     elif (
                         prior in [Priority.POINTS_ASCENDING, Priority.POINTS_DESCEDING]
@@ -570,7 +635,10 @@ class Twitch(object):
                                 True if prior == Priority.POINTS_DESCEDING else False
                             ),
                         )
-                        streamers_watching += [item["index"] for item in items][:2]
+                        picked = [item["index"] for item in items][:2]
+                        streamers_watching += picked
+                        for index in picked:
+                            reasons.setdefault(index, WATCH_REASONS[prior])
 
                     elif prior == Priority.STREAK and len(streamers_watching) < 2:
                         """
@@ -595,6 +663,9 @@ class Twitch(object):
                                 and streamers[index].stream.minute_watched < 7
                             ):
                                 streamers_watching.append(index)
+                                reasons.setdefault(
+                                    index, WATCH_REASONS[Priority.STREAK]
+                                )
                                 if len(streamers_watching) == 2:
                                     break
 
@@ -607,6 +678,7 @@ class Twitch(object):
                                 and streamers[index].drops_condition() is True
                             ):
                                 streamers_watching.append(index)
+                                reasons.setdefault(index, WATCH_REASONS[Priority.DROPS])
                                 drop_streamer = streamers[index]
                                 break
 
@@ -622,7 +694,12 @@ class Twitch(object):
                             key=lambda x: streamers[x].total_points_multiplier(),
                             reverse=True,
                         )
-                        streamers_watching += streamers_with_multiplier[:2]
+                        picked = streamers_with_multiplier[:2]
+                        streamers_watching += picked
+                        for index in picked:
+                            reasons.setdefault(
+                                index, WATCH_REASONS[Priority.SUBSCRIBED]
+                            )
 
                 """
                 Twitch has a limit - you can't watch more than 2 channels at one time.
@@ -635,6 +712,16 @@ class Twitch(object):
                     drop_streamer = None
                 last_drop_streamer = self.__log_drop_watching(
                     last_drop_streamer, drop_streamer
+                )
+                last_targets = self.__log_watch_targets(
+                    last_targets,
+                    {
+                        streamers[index].username: (
+                            streamers[index],
+                            reasons.get(index, WATCH_REASONS[Priority.ORDER]),
+                        )
+                        for index in streamers_watching
+                    },
                 )
 
                 for index in streamers_watching:

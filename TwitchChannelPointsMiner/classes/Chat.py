@@ -5,6 +5,7 @@ from threading import Thread
 
 from irc.bot import SingleServerIRCBot
 
+from TwitchChannelPointsMiner.classes.Settings import Events
 from TwitchChannelPointsMiner.constants import IRC, IRC_PORT
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,8 @@ class ThreadChat(Thread):
     def run(self):
         self.chat_irc = ClientIRC(self.username, self.token, self.channel)
         logger.info(
-            f"Join IRC Chat: {self.channel}", extra={"emoji": ":speech_balloon:"}
+            f"Join IRC Chat: {self.channel}",
+            extra={"emoji": ":speech_balloon:", "event": Events.CHAT_JOIN},
         )
         self.chat_irc.start()
 
