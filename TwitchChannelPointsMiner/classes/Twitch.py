@@ -59,6 +59,10 @@ DIRECTORY_CHANNELS_PER_CAMPAIGN = 3
 STREAMDB_FALLBACK_SECONDS = 12 * 60 * 60
 STREAMDB_CHANNELS_PER_BADGE = 10
 STREAMDB_PREFIX = "streamdb:"
+# Video loading for drop progress (TwitchDropsMiner loads every ~20 seconds).
+STREAM_WATCH_INTERVAL = 20
+STREAM_PLAYLIST_TTL = 5 * 60
+STREAM_CHUNKS_PER_LOAD = 20
 
 
 def _graphql_error_details(response):
@@ -290,13 +294,17 @@ def _campaigns_from_badge(badge):
     return result
 
 
-def _last_playlist_url(text):
-    """Last URL line of an m3u8 playlist (lowest quality variant / newest chunk)."""
-    urls = [
+def _playlist_urls(text):
+    return [
         line.strip()
         for line in (text or "").splitlines()
         if line.strip().startswith(("http://", "https://"))
     ]
+
+
+def _last_playlist_url(text):
+    """Last URL line of an m3u8 playlist (lowest quality variant / newest chunk)."""
+    urls = _playlist_urls(text)
     return urls[-1] if urls else None
 
 
@@ -499,6 +507,12 @@ class Twitch(object):
                     "broadcast_id": streamer.stream.broadcast_id,
                     "player": "site",
                     "user_id": self.twitch_login.get_user_id(),
+                    "channel": streamer.username,
+                    "hidden": False,
+                    "live": True,
+                    "location": "channel",
+                    "logged_in": True,
+                    "muted": False,
                 }
 
                 if (
@@ -506,6 +520,8 @@ class Twitch(object):
                     and streamer.settings.claim_drops is True
                 ):
                     event_properties["game"] = streamer.stream.game_name()
+                    if streamer.stream.game_id() is not None:
+                        event_properties["game_id"] = streamer.stream.game_id()
                     # Update also the campaigns_ids so we are sure to tracking the correct campaign
                     streamer.stream.campaigns_ids = (
                         self.__get_campaign_ids_from_streamer(streamer)
@@ -832,13 +848,48 @@ class Twitch(object):
             )
         return current
 
-    def load_stream_segment(self, streamer):
+    def load_stream_segment(self, streamer, variant_cache=None):
         """
-        Load the stream like a player does (playback token -> playlist -> HEAD of the
-        newest video chunk). Since 2024 Twitch only counts drop progress for viewers that
-        fetch the video; the minute-watched event alone is not enough.
-        Returns True when the chunk was reachable.
+        Load the stream like a player does (playback token -> playlist -> HEAD of every
+        video chunk currently listed, as TwitchDropsMiner does). Twitch only counts drop
+        progress for viewers that fetch the video; the minute-watched event alone is not
+        enough. variant_cache (login -> (playlist url, time)) saves the token request on
+        repeated calls. Returns True when all chunks were reachable.
         """
+        headers = {"User-Agent": self.user_agent}
+        cached = (variant_cache or {}).get(streamer.username)
+        if cached is not None and time.time() - cached[1] < STREAM_PLAYLIST_TTL:
+            variant = cached[0]
+        else:
+            variant = self.__get_stream_variant(streamer, headers)
+            if variant is None:
+                return False
+            if variant_cache is not None:
+                variant_cache[streamer.username] = (variant, time.time())
+
+        chunks = requests.get(
+            variant, headers={**headers, "Connection": "close"}, timeout=20
+        )
+        urls = _playlist_urls(chunks.text) if chunks.status_code == 200 else []
+        if not urls:
+            logger.debug(
+                f"Stream chunk list for {streamer.username} failed (HTTP {chunks.status_code})"
+            )
+            if variant_cache is not None:
+                variant_cache.pop(streamer.username, None)
+            return False
+        for url in urls[-STREAM_CHUNKS_PER_LOAD:]:
+            head = requests.head(url, headers=headers, timeout=20)
+            if head.status_code != 200:
+                logger.debug(
+                    f"Stream chunk for {streamer.username} failed (HTTP {head.status_code})"
+                )
+                return False
+        logger.debug(f"Loaded {len(urls[-STREAM_CHUNKS_PER_LOAD:])} stream chunks for {streamer.username}")
+        return True
+
+    def __get_stream_variant(self, streamer, headers):
+        """URL of the lowest-quality playlist of a live stream, or None."""
         json_data = copy.deepcopy(GQLOperations.PlaybackAccessToken)
         json_data["variables"] = {
             "login": streamer.username,
@@ -857,11 +908,10 @@ class Twitch(object):
                 f"No playback token for {streamer.username}.%s",
                 _graphql_error_details(response),
             )
-            return False
+            return None
         if not signature or not value:
-            return False
+            return None
 
-        headers = {"User-Agent": self.user_agent}
         playlist = requests.get(
             f"https://usher.ttvnw.net/api/channel/hls/{streamer.username}.m3u8",
             params={"sig": signature, "token": value},
@@ -873,23 +923,36 @@ class Twitch(object):
             logger.debug(
                 f"Stream playlist for {streamer.username} failed (HTTP {playlist.status_code})"
             )
+        return variant
+
+    def __watch_video(self, streamer, variant_cache):
+        try:
+            return self.load_stream_segment(streamer, variant_cache)
+        except requests.exceptions.RequestException as e:
+            logger.debug(f"Could not load the stream of {streamer.username}: {e}")
+            variant_cache.pop(streamer.username, None)
             return False
-        chunks = requests.get(variant, headers=headers, timeout=20)
-        chunk = _last_playlist_url(chunks.text) if chunks.status_code == 200 else None
-        if chunk is None:
-            logger.debug(
-                f"Stream chunk list for {streamer.username} failed (HTTP {chunks.status_code})"
+
+    def __report_video(self, streamer, variant_cache, video_ok):
+        """Load the video and log (once per change) whether Twitch serves it."""
+        ok = self.__watch_video(streamer, variant_cache)
+        if video_ok.get(streamer.username) == ok:
+            return ok
+        video_ok[streamer.username] = ok
+        if ok:
+            logger.info(f"📺  Loading the video of {streamer.username} (counts for drops)")
+        else:
+            logger.warning(
+                f"Could not load the video of {streamer.username}; drop progress may not "
+                "count there (see DEBUG log)"
             )
-            return False
-        head = requests.head(chunk, headers=headers, timeout=20)
-        logger.debug(
-            f"Loaded stream chunk for {streamer.username} - Status code: {head.status_code}"
-        )
-        return head.status_code == 200
+        return ok
 
     def send_minute_watched_events(self, streamers, priority, chunk_size=3):
         last_drop_streamer = None
         last_targets = {}
+        variant_cache = {}
+        video_ok = {}
         while self.running:
             drop_streamer = None
             try:
@@ -1032,12 +1095,6 @@ class Twitch(object):
                     next_iteration = time.time() + 60 / len(streamers_watching)
 
                     try:
-                        try:
-                            self.load_stream_segment(streamers[index])
-                        except requests.exceptions.RequestException as e:
-                            logger.debug(
-                                f"Could not load the stream of {streamers[index].username}: {e}"
-                            )
                         response = requests.post(
                             streamers[index].stream.spade_url,
                             data=streamers[index].stream.encode_payload(),
@@ -1098,9 +1155,21 @@ class Twitch(object):
                     except requests.exceptions.Timeout as e:
                         logger.error(f"Error while trying to send minute watched: {e}")
 
-                    self.__chuncked_sleep(
-                        next_iteration - time.time(), chunk_size=chunk_size
-                    )
+                    # Keep "playing" the video of every watched channel between the
+                    # minute-watched events; Twitch needs this for drop progress.
+                    while self.running:
+                        for watched in streamers_watching:
+                            self.__report_video(
+                                streamers[watched], variant_cache, video_ok
+                            )
+                        remaining = next_iteration - time.time()
+                        if remaining <= 0:
+                            break
+                        self.__chuncked_sleep(
+                            min(STREAM_WATCH_INTERVAL, remaining), chunk_size=chunk_size
+                        )
+                        if next_iteration - time.time() <= 0:
+                            break
 
                 if streamers_watching == []:
                     self.__chuncked_sleep(60, chunk_size=chunk_size)
@@ -1485,6 +1554,14 @@ class Twitch(object):
                 f"No live drops-enabled channel found for campaign {campaign.name}"
             )
             return
+        found = self.__channels_offering_campaign(campaign, found)
+        if not found:
+            logger.info(
+                f"Drop '{campaign.name}' ({campaign.game_name()}): live channels in the "
+                "category run other campaigns, trying again in 10 minutes",
+                extra={"emoji": ":mag:", "event": Events.DROP_SCAN},
+            )
+            return
 
         known = {streamer.channel_id: streamer for streamer in streamers}
         selected = []
@@ -1508,6 +1585,24 @@ class Twitch(object):
             + ", ".join(login for _, login in selected),
             extra={"emoji": ":gift:"},
         )
+
+    def __channels_offering_campaign(self, campaign, channels):
+        """
+        Keep the directory channels on which Twitch really offers this campaign.
+        "Drops enabled" only means some campaign of the game runs there, and campaigns
+        taken from the inventory carry no channel list. Stream Database campaigns have no
+        Twitch id to compare, and if Twitch does not answer at all the list is kept as is.
+        """
+        if str(campaign.id).startswith(STREAMDB_PREFIX):
+            return channels
+        offered = self.__get_available_drop_campaigns([cid for cid, _ in channels])
+        if not offered:
+            return channels
+        return [
+            (channel_id, login)
+            for channel_id, login in channels
+            if any(c.get("id") == campaign.id for c in offered.get(channel_id, ()))
+        ]
 
     def __get_available_drop_campaigns(self, channel_ids):
         """channel id -> campaigns Twitch offers on that live channel (AvailableDrops)."""

@@ -1,3 +1,4 @@
+import time
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -252,7 +253,7 @@ class DirectoryDiscoveryTests(unittest.TestCase):
             Twitch,
             "get_drops_enabled_channels",
             return_value=[("1", "a"), ("2", "b"), ("3", "c"), ("4", "d")],
-        ):
+        ), patch.object(Twitch, "_Twitch__get_available_drop_campaigns", return_value={}):
             self.twitch._Twitch__discover_directory_channels(
                 campaign, streamers, discovered, directory_channels
             )
@@ -261,6 +262,30 @@ class DirectoryDiscoveryTests(unittest.TestCase):
         self.assertEqual([s.username for s in streamers], ["a", "b", "c"])
         self.assertTrue(all(s.notify is False for s in streamers))
         self.assertTrue(all(s.settings.claim_drops for s in streamers))
+
+    def test_channels_running_other_campaigns_are_skipped(self):
+        campaign = Campaign(campaign_data([drop_data()]))
+        streamers = []
+        discovered = {}
+        directory_channels = {}
+        offered = {
+            "1": [{"id": "other-campaign"}],
+            "2": [{"id": "campaign-1"}],
+            "3": [],
+        }
+        with patch.object(
+            Twitch,
+            "get_drops_enabled_channels",
+            return_value=[("1", "a"), ("2", "b"), ("3", "c")],
+        ), patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns", return_value=offered
+        ):
+            self.twitch._Twitch__discover_directory_channels(
+                campaign, streamers, discovered, directory_channels
+            )
+
+        self.assertEqual(directory_channels["campaign-1"], {"2"})
+        self.assertEqual([s.username for s in streamers], ["b"])
 
 
 class DropScanSummaryTests(unittest.TestCase):
@@ -432,7 +457,40 @@ class StreamLoadTests(unittest.TestCase):
         self.assertEqual(post.call_args.args[0]["variables"]["login"], "khaldor")
         self.assertEqual(get.call_args_list[0].kwargs["params"], {"sig": "s", "token": "v"})
         self.assertEqual(get.call_args_list[1].args[0], "https://a/low.m3u8")
-        self.assertEqual(head.call_args.args[0], "https://a/2.ts")
+        self.assertEqual(
+            [call.args[0] for call in head.call_args_list],
+            ["https://a/1.ts", "https://a/2.ts"],
+        )
+
+    def test_cached_playlist_skips_token_request(self):
+        from unittest.mock import Mock
+
+        twitch = object.__new__(Twitch)
+        twitch.user_agent = "ua"
+        cache = {"khaldor": ("https://a/low.m3u8", time.time())}
+        media = Mock(status_code=200, text="https://a/1.ts\n")
+        with patch.object(Twitch, "post_gql_request") as post, patch(
+            "TwitchChannelPointsMiner.classes.Twitch.requests.get", return_value=media
+        ) as get, patch(
+            "TwitchChannelPointsMiner.classes.Twitch.requests.head",
+            return_value=Mock(status_code=200),
+        ):
+            self.assertTrue(twitch.load_stream_segment(Streamer("khaldor"), cache))
+        post.assert_not_called()
+        self.assertEqual(get.call_args.args[0], "https://a/low.m3u8")
+
+    def test_failed_chunk_list_drops_cached_playlist(self):
+        from unittest.mock import Mock
+
+        twitch = object.__new__(Twitch)
+        twitch.user_agent = "ua"
+        cache = {"khaldor": ("https://a/low.m3u8", time.time())}
+        with patch(
+            "TwitchChannelPointsMiner.classes.Twitch.requests.get",
+            return_value=Mock(status_code=403, text="[{\"error\":\"x\"}]"),
+        ):
+            self.assertFalse(twitch.load_stream_segment(Streamer("khaldor"), cache))
+        self.assertNotIn("khaldor", cache)
 
     def test_missing_token_skips_stream_load(self):
         twitch = object.__new__(Twitch)
