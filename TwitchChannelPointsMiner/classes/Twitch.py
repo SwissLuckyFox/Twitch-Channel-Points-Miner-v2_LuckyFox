@@ -192,6 +192,43 @@ def describe_watch_change(previous, current):
     return "\n".join(lines)
 
 
+def describe_drop_scan(active_campaigns, stats):
+    """Summary of an hourly drop-campaign scan; stats holds the skip counters."""
+    skipped = []
+    if stats.get("already_earned"):
+        skipped.append(f"{stats['already_earned']} already earned")
+    if stats.get("no_watch_drops"):
+        skipped.append(f"{stats['no_watch_drops']} without watch-time drops")
+    if stats.get("not_linked"):
+        skipped.append(f"{stats['not_linked']} need a linked game account")
+    details = f"checked {stats.get('checked', 0)} campaigns"
+    if skipped:
+        details += "; " + ", ".join(skipped)
+
+    if not active_campaigns:
+        return f"Scanned for drops: no new watch-time drops found ({details})"
+
+    lines = [
+        f"Scanned for drops: found {len(active_campaigns)} campaign(s) with watch-time drops ({details})"
+    ]
+    for campaign in active_campaigns:
+        rewards = ", ".join(
+            f"{drop.benefit or drop.name} ({drop.minutes_required} min)"
+            for drop in campaign.drops
+        )
+        where = (
+            "any live channel in the category"
+            if campaign.any_channel
+            else f"{len(campaign.channels)} participating channel(s)"
+        )
+        lines.append(
+            f"- {campaign.name} | Category: {campaign.game_name() or 'unknown'} "
+            f"| Rewards: {rewards} | Watch on: {where}"
+        )
+    lines.append("Checking which participating channels are live...")
+    return "\n".join(lines)
+
+
 class Twitch(object):
     __slots__ = [
         "cookies_file",
@@ -1163,6 +1200,7 @@ class Twitch(object):
         directory_channels = {}
         directory_checked = {}
         while self.running:
+            scan_stats = None
             try:
                 # Get update from dashboard each 60minutes
                 if (
@@ -1176,6 +1214,11 @@ class Twitch(object):
                         self.__get_drops_dashboard(status="ACTIVE")
                     )
                     campaigns = []
+                    scan_stats = {
+                        "checked": len(campaigns_details),
+                        "no_watch_drops": 0,
+                        "not_linked": 0,
+                    }
 
                     # Going to clear array and structure. Remove all the timeBasedDrops expired or not started yet
                     for index in range(0, len(campaigns_details)):
@@ -1184,19 +1227,36 @@ class Twitch(object):
                             # Remove all the drops already claimed or with dt not matching
                             campaign.clear_drops()
                             if campaign.drops == []:
+                                scan_stats["no_watch_drops"] += 1
                                 continue
                             if not campaign.is_eligible:
+                                scan_stats["not_linked"] += 1
                                 logger.debug(
                                     f"Skipping drop campaign {campaign.name}: "
                                     "game account is not linked"
                                 )
                                 continue
                             campaigns.append(campaign)
+                        else:
+                            scan_stats["no_watch_drops"] += 1
 
                 # Divide et impera :)
                 campaigns = self.__sync_campaigns(campaigns)
                 active_campaigns = [c for c in campaigns if c.drops]
                 active_ids = {c.id for c in active_campaigns}
+
+                if scan_stats is not None:
+                    scan_stats["already_earned"] = len(campaigns) - len(
+                        active_campaigns
+                    )
+                    logger.info(
+                        describe_drop_scan(active_campaigns, scan_stats),
+                        extra={"emoji": ":mag:", "event": Events.DROP_SCAN},
+                    )
+                    scan_stats = None
+                    report_live = True
+                else:
+                    report_live = False
 
                 # Forget directory channels of campaigns that are done.
                 for campaign_id in list(directory_channels):
@@ -1276,6 +1336,24 @@ class Twitch(object):
                     if streamer.is_online is True
                     for campaign in streamer.stream.campaigns
                 }
+                if report_live:
+                    for campaign in active_campaigns:
+                        live = [
+                            streamer.username
+                            for streamer in streamers
+                            if streamer.is_online is True
+                            and campaign in streamer.stream.campaigns
+                        ]
+                        if live:
+                            status = "live now: " + ", ".join(live)
+                        elif campaign.any_channel:
+                            status = "none of your channels is live, searching the category"
+                        else:
+                            status = "no participating channel is live, checking again every minute"
+                        logger.info(
+                            f"Drop '{campaign.name}' ({campaign.game_name()}): {status}",
+                            extra={"emoji": ":mag:", "event": Events.DROP_SCAN},
+                        )
                 for campaign in active_campaigns:
                     if (
                         not campaign.any_channel

@@ -75,6 +75,7 @@ class RunTemplateTests(unittest.TestCase):
         self.assertIsNotNone(settings.telegram)
         self.assertIn("CHAT_JOIN", settings.telegram.events)
         self.assertIn("WATCH_TARGET", settings.telegram.events)
+        self.assertIn("DROP_SCAN", settings.telegram.events)
         self.assertIsNotNone(settings.discord)
 
     def test_telegram_chat_id_equal_to_bot_id_is_rejected(self):

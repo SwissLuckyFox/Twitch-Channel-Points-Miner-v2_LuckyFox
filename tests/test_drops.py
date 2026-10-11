@@ -234,6 +234,26 @@ class DirectoryDiscoveryTests(unittest.TestCase):
         self.assertTrue(all(s.settings.claim_drops for s in streamers))
 
 
+class DropScanSummaryTests(unittest.TestCase):
+    def test_no_drops_found(self):
+        message = twitch_module.describe_drop_scan(
+            [], {"checked": 5, "no_watch_drops": 3, "already_earned": 2}
+        )
+        self.assertTrue(message.startswith("Scanned for drops: no new watch-time drops found"))
+        self.assertIn("checked 5 campaigns", message)
+        self.assertIn("2 already earned", message)
+        self.assertIn("3 without watch-time drops", message)
+
+    def test_found_drop_lists_category_and_reward(self):
+        campaign = Campaign(campaign_data([drop_data()]))
+        message = twitch_module.describe_drop_scan([campaign], {"checked": 1})
+        self.assertIn("found 1 campaign(s)", message)
+        self.assertIn("Category: Alien: Isolation", message)
+        self.assertIn("Alien: Isolation Horror (30 min)", message)
+        self.assertIn("any live channel in the category", message)
+        self.assertIn("Checking which participating channels are live", message)
+
+
 class PersistedQueryFallbackTests(unittest.TestCase):
     def setUp(self):
         twitch_module._preferred_hashes.clear()

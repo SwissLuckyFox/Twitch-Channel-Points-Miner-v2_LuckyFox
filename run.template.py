@@ -77,6 +77,7 @@ def optional_telegram():
             Events.BONUS_CLAIM,
             Events.CHAT_JOIN,
             Events.WATCH_TARGET,
+            Events.DROP_SCAN,
         ],
         disable_notification=True,
     )

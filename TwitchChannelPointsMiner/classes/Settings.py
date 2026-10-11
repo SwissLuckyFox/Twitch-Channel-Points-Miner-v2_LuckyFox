@@ -41,6 +41,7 @@ class Events(Enum):
     JOIN_RAID = auto()
     DROP_CLAIM = auto()
     DROP_STATUS = auto()
+    DROP_SCAN = auto()
     CHAT_JOIN = auto()
     WATCH_TARGET = auto()
 
