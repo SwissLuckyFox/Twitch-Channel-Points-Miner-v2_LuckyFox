@@ -1,6 +1,7 @@
 # Copy this file to your Unraid appdata config directory as streamers.txt.
 # Add one Twitch username per line. Lines starting with # are comments.
 # Optional per-streamer chat setting: username chat=ALWAYS|NEVER|ONLINE|OFFLINE
+# Followed channels are mined too. Exclude one with a line like: !username
 corgicam chat=ONLINE
 caboose2253
 zezeipanther
@@ -16,4 +17,4 @@ kanjoyume
 allubillis
 litheoss
 merlekoz
-ivydafurry
+!ivydafurry

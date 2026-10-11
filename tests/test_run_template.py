@@ -131,6 +131,38 @@ class RunTemplateTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "No streamers configured"):
                 run_template.build_streamers(streamers_file)
 
+    def test_exclamation_lines_are_blacklisted(self):
+        with tempfile.TemporaryDirectory() as config_directory:
+            streamers_file = Path(config_directory) / "streamers.txt"
+            streamers_file.write_text(
+                "my_channel\n"
+                "!IvyDaFurry  # renamed account from my follows\n"
+                "! other\n",
+                encoding="utf-8",
+            )
+            streamers, blacklist = run_template.build_streamer_lists(streamers_file)
+
+        self.assertEqual([streamer.username for streamer in streamers], ["my_channel"])
+        self.assertEqual(blacklist, ["ivydafurry", "other"])
+
+    def test_blacklisted_streamer_is_removed_from_streamer_list(self):
+        with tempfile.TemporaryDirectory() as config_directory:
+            streamers_file = Path(config_directory) / "streamers.txt"
+            streamers_file.write_text(
+                "my_channel\nIvyDaFurry\n!ivydafurry\n", encoding="utf-8"
+            )
+            streamers = run_template.build_streamers(streamers_file)
+
+        self.assertEqual([streamer.username for streamer in streamers], ["my_channel"])
+
+    def test_empty_blacklist_entry_is_rejected(self):
+        with tempfile.TemporaryDirectory() as config_directory:
+            streamers_file = Path(config_directory) / "streamers.txt"
+            streamers_file.write_text("my_channel\n!\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "expected '!username'"):
+                run_template.build_streamers(streamers_file)
+
     def test_invalid_chat_setting_is_rejected(self):
         with tempfile.TemporaryDirectory() as config_directory:
             streamers_file = Path(config_directory) / "streamers.txt"

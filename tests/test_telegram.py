@@ -54,6 +54,40 @@ class TelegramTests(unittest.TestCase):
         warnings = [r for r in logs.records if r.levelname == "WARNING"]
         self.assertEqual(len(warnings), 1)
 
+    @patch("TwitchChannelPointsMiner.classes.Telegram.requests.get")
+    def test_verify_reports_reachable_chat(self, get):
+        get.return_value = Mock(status_code=200)
+        get.return_value.json.return_value = {
+            "ok": True,
+            "result": {"type": "private", "first_name": "Lucky"},
+        }
+
+        with self.assertLogs(
+            "TwitchChannelPointsMiner.classes.Telegram", level="INFO"
+        ) as logs:
+            self.assertTrue(self.telegram.verify())
+
+        self.assertIn("Telegram ready", "\n".join(logs.output))
+        self.assertTrue(get.call_args.args[0].endswith("/getChat"))
+        self.assertEqual(get.call_args.kwargs["params"], {"chat_id": 123})
+
+    @patch("TwitchChannelPointsMiner.classes.Telegram.requests.get")
+    def test_verify_reports_unreachable_chat_without_token(self, get):
+        get.return_value = Mock(status_code=400)
+        get.return_value.json.return_value = {
+            "ok": False,
+            "description": "Bad Request: chat not found",
+        }
+
+        with self.assertLogs(
+            "TwitchChannelPointsMiner.classes.Telegram", level="WARNING"
+        ) as logs:
+            self.assertFalse(self.telegram.verify())
+
+        output = "\n".join(logs.output)
+        self.assertIn("chat not found", output)
+        self.assertNotIn("secret-bot-token", output)
+
     @patch("TwitchChannelPointsMiner.classes.Telegram.requests.post")
     def test_unsubscribed_event_is_not_sent(self, post):
         self.telegram.send("hello", Events.BET_WIN)

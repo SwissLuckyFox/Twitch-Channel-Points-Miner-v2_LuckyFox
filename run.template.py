@@ -173,7 +173,13 @@ def build_miner_kwargs():
 
 
 def build_streamers(streamers_file=STREAMERS_FILE):
+    return build_streamer_lists(streamers_file)[0]
+
+
+def build_streamer_lists(streamers_file=STREAMERS_FILE):
+    """Return (streamers, blacklist); lines starting with '!' are blacklisted."""
     streamers = []
+    blacklist = []
     usernames = set()
 
     try:
@@ -181,6 +187,16 @@ def build_streamers(streamers_file=STREAMERS_FILE):
             for line_number, raw_line in enumerate(stream, start=1):
                 line = raw_line.partition("#")[0].strip()
                 if not line:
+                    continue
+
+                if line.startswith("!"):
+                    excluded = line[1:].strip()
+                    if not excluded or len(excluded.split()) != 1:
+                        raise ValueError(
+                            f"{streamers_file}:{line_number}: expected '!username' "
+                            "to exclude a streamer."
+                        )
+                    blacklist.append(excluded.lower())
                     continue
 
                 fields = line.split()
@@ -221,12 +237,12 @@ def build_streamers(streamers_file=STREAMERS_FILE):
     except FileNotFoundError as error:
         raise ValueError(
             f"Streamer list not found at {streamers_file}. Create the file on the "
-            "Unraid host and set the Streamer list path mapping to that file."
+            "Unraid host in the folder set as 'Streamer list folder'."
         ) from error
     except IsADirectoryError as error:
         raise ValueError(
             f"Streamer list path {streamers_file} points to a directory, not a "
-            "file. Create streamers.txt on the Unraid host and map that file."
+            "file. Map the folder that contains streamers.txt to /usr/src/app/user-config."
         ) from error
 
     if not streamers:
@@ -235,21 +251,39 @@ def build_streamers(streamers_file=STREAMERS_FILE):
             "username per line."
         )
 
-    return streamers
+    excluded = set(blacklist)
+    streamers = [s for s in streamers if s.username not in excluded]
+    return streamers, blacklist
 
 
 def main():
     try:
         miner_kwargs = build_miner_kwargs()
-        streamers = build_streamers()
+        streamers, blacklist = build_streamer_lists()
     except ValueError as error:
         logger.error("%s", error)
         raise SystemExit(2) from error
 
+    logger.info(
+        "Loaded %d streamers from %s: %s",
+        len(streamers),
+        STREAMERS_FILE,
+        ", ".join(streamer.username for streamer in streamers),
+    )
+
     twitch_miner = TwitchChannelPointsMiner(**miner_kwargs)
+
+    # Run after the miner is created so its logging configuration is active.
+    telegram = miner_kwargs["logger_settings"].telegram
+    if telegram is not None:
+        telegram.verify()
+    else:
+        logger.info("Telegram notifications are disabled.")
+
     twitch_miner.analytics(host="0.0.0.0", port=5000, refresh=5, days_ago=7)
     twitch_miner.mine(
         streamers,
+        blacklist=blacklist,
         followers=True,
         followers_order=FollowersOrder.ASC,
     )

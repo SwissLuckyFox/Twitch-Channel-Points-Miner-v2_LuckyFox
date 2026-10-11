@@ -26,6 +26,52 @@ class Telegram(object):
         self.disable_notification = disable_notification
         self.last_error = None
 
+    def verify(self) -> bool:
+        """Check at startup that the bot can reach the configured chat."""
+        api_base = self.telegram_api.rsplit("/", 1)[0]
+        try:
+            response = requests.get(
+                f"{api_base}/getChat", params={"chat_id": self.chat_id}, timeout=10
+            )
+            result = response.json()
+        except (requests.exceptions.RequestException, ValueError) as error:
+            # Never log the request URL: it contains the bot token.
+            logger.warning(
+                "Telegram check failed: could not reach Telegram (%s).",
+                type(error).__name__,
+            )
+            return False
+
+        if isinstance(result, dict) and result.get("ok"):
+            chat = result.get("result") or {}
+            name = (
+                chat.get("title")
+                or chat.get("username")
+                or chat.get("first_name")
+                or "unknown"
+            )
+            logger.info(
+                "Telegram ready: sending to %s chat '%s' (ID %s).",
+                chat.get("type", "unknown"),
+                name,
+                self.chat_id,
+            )
+            return True
+
+        description = (
+            result.get("description", "unexpected API response")
+            if isinstance(result, dict)
+            else "unexpected API response"
+        )
+        logger.warning(
+            "Telegram check failed for chat ID %s (HTTP %s: %s). Notifications "
+            "will not arrive until TELEGRAM_CHAT_ID / TELEGRAM_BOT_TOKEN are fixed.",
+            self.chat_id,
+            response.status_code,
+            description,
+        )
+        return False
+
     def _warn(self, message: str) -> None:
         # Log each distinct failure once instead of once per notification.
         if message != self.last_error:
