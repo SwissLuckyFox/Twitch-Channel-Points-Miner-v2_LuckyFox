@@ -1884,7 +1884,7 @@ class Twitch(object):
                             if campaign.drops == []:
                                 scan_stats["no_watch_drops"] += 1
                                 continue
-                            if not campaign.is_eligible:
+                            if Settings.require_linked_account and not campaign.is_eligible:
                                 scan_stats["not_linked"] += 1
                                 logger.debug(
                                     f"Skipping drop campaign {campaign.name}: "

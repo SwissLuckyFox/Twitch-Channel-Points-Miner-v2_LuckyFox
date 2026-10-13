@@ -20,8 +20,8 @@ class FollowersOrder(Enum):
 
 # Empty object shared between class
 class Settings(object):
-    __slots__ = ["logger", "streamer_settings", "require_linked_account"]
-    require_linked_account: bool = False
+    __slots__ = ["logger", "streamer_settings"]
+    require_linked_account = False
 
 
 class Events(Enum):
