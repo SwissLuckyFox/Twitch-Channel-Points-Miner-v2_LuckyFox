@@ -121,6 +121,7 @@ def build_miner_kwargs():
     return {
         "username": username,
         "claim_drops_startup": False,
+        "require_linked_account": os.getenv("REQUIRE_LINKED_ACCOUNT", "").strip().lower() in ("1", "true", "yes"),
         "priority": [
             Priority.DROPS,
             Priority.STREAK,

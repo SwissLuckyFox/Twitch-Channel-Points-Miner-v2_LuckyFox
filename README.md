@@ -390,6 +390,13 @@ Available values are the following:
 
 You can combine all priority but keep in mind that use `ORDER` and `POINTS_ASCENDING` in the same settings doesn't make sense.
 
+### TwitchChannelPointsMiner options
+| Key                        | Type   | Default                                            | Description                                                                                                                                           |
+|----------------------------|--------|----------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `claim_drops_startup`      | bool   | False                                              | If you want to auto claim all claimable drops from Twitch inventory on startup.                                                                       |
+| `require_linked_account`   | bool   | False                                              | If True, only drop campaigns with a connected game account (or badges/emotes) will be farmed. If False (default), drops are farmed regardless.        |
+| `priority`                 | list   | `[Priority.STREAK, Priority.DROPS, Priority.ORDER]`| Priority order for selecting streams to watch.                                                                                                        |
+
 ### LoggerSettings
 | Key             	| Type            	| Default                        	                                  | Description                                                                          	                                                                                                  |
 |-----------------	|-----------------	|-------------------------------------------------------------------- |------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

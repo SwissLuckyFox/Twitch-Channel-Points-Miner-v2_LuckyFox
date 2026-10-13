@@ -49,6 +49,8 @@ class Campaign(object):
 
     @property
     def is_eligible(self):
+        if getattr(Settings, "require_linked_account", False) is False:
+            return True
         # Badges/emotes need no linked game account; other rewards do.
         return self.account_connected or any(
             drop.is_badge_or_emote for drop in self.drops

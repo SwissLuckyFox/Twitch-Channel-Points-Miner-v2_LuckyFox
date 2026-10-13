@@ -30,4 +30,5 @@
   <Config Name="Telegram chat ID" Target="TELEGRAM_CHAT_ID" Default="" Mode="" Description="Optional. Set together with the Telegram bot token, or leave both empty. Group chat IDs are negative and must keep the leading minus (e.g. -123456789)." Type="Variable" Display="always" Required="false" Mask="false"></Config>
   <Config Name="Telegram bot token" Target="TELEGRAM_BOT_TOKEN" Default="" Mode="" Description="Optional. Set together with the Telegram chat ID, or leave both empty." Type="Variable" Display="always" Required="false" Mask="true"></Config>
   <Config Name="Discord webhook URL" Target="DISCORD_WEBHOOK_URL" Default="" Mode="" Description="Optional. Leave empty to disable Discord notifications." Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="Require linked account for drops" Target="REQUIRE_LINKED_ACCOUNT" Default="false" Mode="" Description="Optional. Set to true if you only want to farm drops for campaigns with a connected game account. When false (default), drops are farmed regardless of whether an account is linked." Type="Variable" Display="always" Required="false" Mask="false">false</Config>
 </Container>

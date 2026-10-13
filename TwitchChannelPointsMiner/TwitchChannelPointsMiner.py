@@ -81,6 +81,8 @@ class TwitchChannelPointsMiner:
         logger_settings: LoggerSettings = LoggerSettings(),
         # Default values for all streamers
         streamer_settings: StreamerSettings = StreamerSettings(),
+        # Whether a linked game account is required to farm drops
+        require_linked_account: bool = False,
     ):
         Settings.analytics_path = os.path.join(Path().absolute(), "analytics", username)
         Path(Settings.analytics_path).mkdir(parents=True, exist_ok=True)
@@ -89,6 +91,7 @@ class TwitchChannelPointsMiner:
 
         # Set as global config
         Settings.logger = logger_settings
+        Settings.require_linked_account = require_linked_account
 
         # Init as default all the missing values
         streamer_settings.default()
