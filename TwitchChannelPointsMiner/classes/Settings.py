@@ -2,9 +2,9 @@ from enum import Enum, auto
 
 
 class Priority(Enum):
-    ORDER = auto()
     STREAK = auto()
     DROPS = auto()
+    ORDER = auto()
     SUBSCRIBED = auto()
     POINTS_ASCENDING = auto()
     POINTS_DESCEDING = auto()
