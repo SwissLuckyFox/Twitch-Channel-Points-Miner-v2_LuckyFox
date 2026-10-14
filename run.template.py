@@ -111,6 +111,22 @@ def optional_discord():
     )
 
 
+def mining_priority():
+    value = os.getenv("MINING_PRIORITY")
+    if value is None:
+        return [Priority.DROPS, Priority.STREAK, Priority.ORDER, Priority.SUBSCRIBED]
+
+    names = [name.strip().upper() for name in value.split(",")]
+    allowed = ", ".join(Priority.__members__)
+    if any(name not in Priority.__members__ for name in names):
+        raise ValueError(
+            f"MINING_PRIORITY must be a comma-separated list of: {allowed}."
+        )
+    if len(names) != len(set(names)):
+        raise ValueError("MINING_PRIORITY must not contain duplicate priorities.")
+    return [Priority[name] for name in names]
+
+
 def build_miner_kwargs():
     username = os.getenv("TWITCH_USERNAME", "").strip()
     if not username:
@@ -122,12 +138,7 @@ def build_miner_kwargs():
         "username": username,
         "claim_drops_startup": False,
         "require_linked_account": os.getenv("REQUIRE_LINKED_ACCOUNT", "").strip().lower() in ("1", "true", "yes"),
-        "priority": [
-            Priority.DROPS,
-            Priority.STREAK,
-            Priority.ORDER,
-            Priority.SUBSCRIBED,
-        ],
+        "priority": mining_priority(),
         "logger_settings": LoggerSettings(
             save=True,
             console_level=logging.INFO,

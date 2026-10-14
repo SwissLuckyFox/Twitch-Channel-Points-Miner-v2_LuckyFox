@@ -368,6 +368,14 @@ Choose any Unraid folder for your configuration, create a file named `streamers.
 
 Configure `TWITCH_USERNAME`; optionally set `TELEGRAM_CHAT_ID`, `TELEGRAM_BOT_TOKEN`, and `DISCORD_WEBHOOK_URL` as container environment variables. To customize other script settings, edit `run.template.py` in the repository and publish a new image.
 
+To change the watching priority without rebuilding the image, set the **Mining priority** field (`MINING_PRIORITY`) in Unraid's container settings, then apply the changes to restart the container. For streaks first, then drops, subscriptions, and finally streamer-list order, use:
+
+```text
+STREAK,DROPS,SUBSCRIBED,ORDER
+```
+
+Values are comma-separated and case-insensitive. Supported names are `STREAK`, `DROPS`, `SUBSCRIBED`, `ORDER`, `POINTS_ASCENDING`, and `POINTS_DESCEDING` (the spelling follows the existing API). Put `ORDER` last so it fills remaining watching slots. Subsets are supported, but omitted priorities are not evaluated. Empty entries, unknown names, and duplicates stop startup with an error. The updated Unraid template defaults to the order above; existing containers without `MINING_PRIORITY` retain `DROPS,STREAK,ORDER,SUBSCRIBED`. After installing an image with this feature, existing containers can add `MINING_PRIORITY` manually as a variable if the field is not yet shown.
+
 To have Unraid show the paths and environment-variable fields automatically, install [`unraid-template.xml`](./unraid-template.xml) as a User Template on the Unraid host (for example, save it as `/boot/config/plugins/dockerMan/templates-user/my-LuckyTwitchMiner.xml`) and select it when adding the container. An image build alone cannot add fields to Unraid's UI. When migrating an existing container, remove its old `/usr/src/app/run.py` bind mount and recreate it from the updated template; otherwise the old appdata script will continue to override the image copy. Optional Telegram/Discord settings that are absent or malformed are disabled with a warning; remote service rejections and network errors are also logged without stopping mining.
 
 About the *Docker* version; the community has always shown great interest in the Docker version of the project. Especially [@SethFalco](https://github.com/SethFalco) ([#79](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/issues/79)), [@KamushekDev](https://github.com/KamushekDev) ([#300](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/pull/300)), [@au-ee](https://github.com/au-ee) ([#223](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/pull/223)) they showed their ideas. I've decided to merge the PR from [@RakSrinaNa](https://github.com/RakSrinaNa) ([#343](https://github.com/Tkd-Alex/Twitch-Channel-Points-Miner-v2/pull/343)) because is one of the most active user of the project and the PR was the only one with a Continuous Integration (CI).

@@ -4,8 +4,8 @@ from enum import Enum, auto
 class Priority(Enum):
     STREAK = auto()
     DROPS = auto()
-    ORDER = auto()
     SUBSCRIBED = auto()
+    ORDER = auto()
     POINTS_ASCENDING = auto()
     POINTS_DESCEDING = auto()
 

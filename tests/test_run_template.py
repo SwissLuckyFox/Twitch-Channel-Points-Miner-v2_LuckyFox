@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from TwitchChannelPointsMiner import TwitchChannelPointsMiner
 from TwitchChannelPointsMiner.classes.Chat import ChatPresence
+from TwitchChannelPointsMiner.classes.Settings import Priority
 
 
 RUN_SCRIPT_PATH = Path("/usr/src/app/run.py")
@@ -20,6 +21,46 @@ spec.loader.exec_module(run_template)
 
 
 class RunTemplateTests(unittest.TestCase):
+    def test_priority_defaults_preserve_existing_order_when_unset(self):
+        with patch.dict(os.environ, {"TWITCH_USERNAME": "ci-validation-user"}, clear=True):
+            kwargs = run_template.build_miner_kwargs()
+        self.assertEqual(
+            kwargs["priority"],
+            [Priority.DROPS, Priority.STREAK, Priority.ORDER, Priority.SUBSCRIBED],
+        )
+
+    def test_priority_environment_preserves_requested_order(self):
+        with patch.dict(
+            os.environ,
+            {
+                "TWITCH_USERNAME": "ci-validation-user",
+                "MINING_PRIORITY": " streak, drops ,subscribed, ORDER ",
+            },
+            clear=True,
+        ):
+            kwargs = run_template.build_miner_kwargs()
+        self.assertEqual(
+            kwargs["priority"],
+            [Priority.STREAK, Priority.DROPS, Priority.SUBSCRIBED, Priority.ORDER],
+        )
+
+    def test_priority_supports_all_enum_values_and_subsets(self):
+        for priority in Priority:
+            with self.subTest(priority=priority), patch.dict(
+                os.environ, {"MINING_PRIORITY": priority.name}, clear=True
+            ):
+                self.assertEqual(run_template.mining_priority(), [priority])
+
+    def test_invalid_priority_environment_is_rejected(self):
+        for value in ("", " ", "STREAK,,ORDER", "STREAK,", "SUBS", "ORDER,order"):
+            with self.subTest(value=value), patch.dict(
+                os.environ,
+                {"TWITCH_USERNAME": "ci-validation-user", "MINING_PRIORITY": value},
+                clear=True,
+            ):
+                with self.assertRaisesRegex(ValueError, "MINING_PRIORITY"):
+                    run_template.build_miner_kwargs()
+
     def test_miner_configuration_matches_fork_constructor(self):
         with patch.dict(os.environ, {"TWITCH_USERNAME": "ci-validation-user"}, clear=True):
             kwargs = run_template.build_miner_kwargs()
