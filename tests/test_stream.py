@@ -50,6 +50,17 @@ class StreamerOfflineNotificationTests(unittest.TestCase):
         self.assertFalse(hasattr(record, "skip_telegram"))
         self.assertFalse(streamer.is_online)
 
+    def test_repeated_offline_check_of_discovered_channel_is_debug_only(self):
+        streamer = Streamer("someone")
+        streamer.notify = False
+        with patch.object(Streamer, "toggle_chat"), patch.object(
+            Streamer, "__str__", lambda self: self.username
+        ), self.assertLogs(
+            "TwitchChannelPointsMiner.classes.entities.Streamer", level="DEBUG"
+        ) as logs:
+            streamer.set_offline()
+        self.assertEqual([r.levelname for r in logs.records], ["DEBUG"])
+
 
 class DropDiscoverySettingsTests(unittest.TestCase):
     def test_discovered_streamer_settings_only_use_supported_options(self):

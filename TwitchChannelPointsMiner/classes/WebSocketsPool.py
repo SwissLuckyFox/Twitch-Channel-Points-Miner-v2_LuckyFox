@@ -117,15 +117,25 @@ class WebSocketsPool:
 
     @staticmethod
     def handle_reconnection(ws):
+        # Both the PONG watchdog and on_close (fired when the socket stops) call this.
+        # Reconnect only once per socket, otherwise an extra connection with the same
+        # topics survives and every PubSub message is handled twice (then 4x, ...).
+        with ws.reconnect_lock:
+            if ws.is_reconneting:
+                return
+            # Set the current socket as reconnecting status
+            # So the external ping check will be locked
+            ws.is_reconneting = True
+
         # Close the current WebSocket.
         ws.is_closed = True
         ws.keep_running = False
+        try:
+            ws.close()
+        except Exception:
+            logger.debug(f"#{ws.index} - Error while closing WebSocket", exc_info=True)
+
         # Reconnect only if ws.forced_close is False (replace the keep_running)
-
-        # Set the current socket as reconnecting status
-        # So the external ping check will be locked
-        ws.is_reconneting = True
-
         if ws.forced_close is False:
             logger.info(
                 f"#{ws.index} - Reconnecting to Twitch PubSub server in ~60 seconds"
@@ -152,6 +162,10 @@ class WebSocketsPool:
     @staticmethod
     def on_message(ws, message):
         logger.debug(f"#{ws.index} - Received: {message.strip()}")
+        pool_ws = ws.parent_pool.ws
+        if ws.index < len(pool_ws) and pool_ws[ws.index] is not ws:
+            # A replaced connection that is still shutting down: ignore duplicates.
+            return
         response = json.loads(message)
 
         if response["type"] == "MESSAGE":

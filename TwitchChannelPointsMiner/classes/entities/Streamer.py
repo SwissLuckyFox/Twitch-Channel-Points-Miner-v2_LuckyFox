@@ -125,6 +125,10 @@ class Streamer(object):
         self.toggle_chat()
 
         extra = {"emoji": ":sleeping:", "event": Events.STREAMER_OFFLINE}
+        if not went_offline and not self.notify:
+            # Repeated checks of channels the miner added itself: keep the log quiet.
+            logger.debug(f"{self} is Offline!", extra=extra)
+            return
         if not went_offline or not self.notify:
             # Already offline (e.g. the initial check at startup): log only.
             extra["skip_telegram"] = True

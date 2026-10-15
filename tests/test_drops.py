@@ -287,6 +287,30 @@ class DirectoryDiscoveryTests(unittest.TestCase):
         self.assertEqual(directory_channels["campaign-1"], {"2"})
         self.assertEqual([s.username for s in streamers], ["b"])
 
+    def test_allow_list_campaign_only_uses_live_allowed_channels(self):
+        campaign = Campaign(
+            campaign_data([drop_data()], channels=[{"id": "2"}, {"id": "99"}])
+        )
+        streamers = []
+        discovered = {}
+        directory_channels = {}
+        with patch.object(
+            Twitch,
+            "get_drops_enabled_channels",
+            return_value=[("1", "a"), ("2", "b"), ("3", "c")],
+        ) as directory, patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns", return_value={}
+        ):
+            self.twitch._Twitch__discover_directory_channels(
+                campaign, streamers, discovered, directory_channels
+            )
+
+        self.assertEqual(
+            directory.call_args.kwargs["limit"], twitch_module.ALLOW_LIST_SEARCH_LIMIT
+        )
+        self.assertEqual(directory_channels["campaign-1"], {"2"})
+        self.assertEqual([s.username for s in streamers], ["b"])
+
 
 class DropScanSummaryTests(unittest.TestCase):
     def test_no_drops_found(self):

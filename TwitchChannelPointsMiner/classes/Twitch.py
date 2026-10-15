@@ -54,6 +54,9 @@ logger = logging.getLogger(__name__)
 DIRECTORY_SEARCH_INTERVAL = 10 * 60
 DIRECTORY_SEARCH_LIMIT = 10
 DIRECTORY_CHANNELS_PER_CAMPAIGN = 3
+# Campaigns with a channel allow-list: how many live category streams to scan for
+# allow-listed channels (instead of polling every allow-listed channel).
+ALLOW_LIST_SEARCH_LIMIT = 30
 # Stream Database badges Twitch never confirms (no progress in the inventory) are
 # given up after this long, so the miner doesn't watch a category forever.
 STREAMDB_FALLBACK_SECONDS = 12 * 60 * 60
@@ -1548,7 +1551,18 @@ class Twitch(object):
     def __discover_directory_channels(
         self, campaign, streamers, discovered_streamers, directory_channels
     ):
-        found = self.get_drops_enabled_channels(campaign.game)
+        if campaign.any_channel:
+            found = self.get_drops_enabled_channels(campaign.game)
+        else:
+            # Look deeper into the category, then keep only allow-listed channels.
+            allowed = {str(channel_id) for channel_id in campaign.channels}
+            found = [
+                (channel_id, login)
+                for channel_id, login in self.get_drops_enabled_channels(
+                    campaign.game, limit=ALLOW_LIST_SEARCH_LIMIT
+                )
+                if channel_id in allowed
+            ]
         if not found:
             logger.debug(
                 f"No live drops-enabled channel found for campaign {campaign.name}"
@@ -1918,32 +1932,13 @@ class Twitch(object):
                     if campaign_id not in active_ids:
                         del directory_channels[campaign_id]
 
-                campaign_channels = {
-                    channel_id
-                    for campaign in active_campaigns
-                    for channel_id in campaign.channels
-                }
-                needed_channels = campaign_channels | {
+                # Allow-lists can hold hundreds of channels, so they are not all added
+                # and polled; live candidates come from the game directory instead.
+                needed_channels = {
                     channel_id
                     for channels in directory_channels.values()
                     for channel_id in channels
                 }
-                known_channel_ids = {
-                    streamer.channel_id for streamer in streamers
-                }
-                channel_logins = self.get_channel_logins(
-                    [
-                        channel_id
-                        for channel_id in campaign_channels
-                        if channel_id not in known_channel_ids
-                        and channel_id not in discovered_streamers
-                    ]
-                )
-
-                for channel_id, login in channel_logins.items():
-                    self.__add_drop_streamer(
-                        streamers, discovered_streamers, channel_id, login
-                    )
 
                 for channel_id in list(discovered_streamers):
                     if channel_id not in needed_channels:
@@ -1982,9 +1977,9 @@ class Twitch(object):
                             campaign.id for campaign in eligible_campaigns
                         ]
 
-                # Campaigns open to every channel of a game ("watch any participating
-                # live channel"): if none of the known channels can progress them, look
-                # for live drops-enabled channels in the game directory.
+                # If none of the known channels can progress a campaign, look for live
+                # drops-enabled channels in the game directory (for allow-list campaigns
+                # only channels on the allow-list are kept).
                 covered_ids = {
                     campaign.id
                     for streamer in streamers
@@ -2004,15 +1999,17 @@ class Twitch(object):
                         elif campaign.any_channel:
                             status = "none of your channels is live, searching the category"
                         else:
-                            status = "no participating channel is live, checking again every minute"
+                            status = (
+                                "none of your channels is live, searching the "
+                                "category for participating channels"
+                            )
                         logger.info(
                             f"Drop '{campaign.name}' ({campaign.game_name()}): {status}",
                             extra={"emoji": ":mag:", "event": Events.DROP_SCAN},
                         )
                 for campaign in active_campaigns:
                     if (
-                        not campaign.any_channel
-                        or campaign.id in covered_ids
+                        campaign.id in covered_ids
                         or time.time() - directory_checked.get(campaign.id, 0)
                         < DIRECTORY_SEARCH_INTERVAL
                     ):
