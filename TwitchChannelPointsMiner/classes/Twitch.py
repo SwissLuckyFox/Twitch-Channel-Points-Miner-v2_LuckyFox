@@ -66,6 +66,8 @@ STREAMDB_PREFIX = "streamdb:"
 STREAM_WATCH_INTERVAL = 20
 STREAM_PLAYLIST_TTL = 5 * 60
 STREAM_CHUNKS_PER_LOAD = 20
+# Seven watched minutes plus a one-minute buffer for Twitch's progress tracking.
+WATCH_STREAK_MINUTES = 8
 
 
 def _graphql_error_details(response):
@@ -349,8 +351,8 @@ def _leave_reason(streamer, previous_reason):
     if previous_reason == WATCH_REASONS[Priority.STREAK]:
         if streamer.stream.watch_streak_missing is False:
             return "watch streak collected"
-        if streamer.stream.minute_watched >= 7:
-            return "watched long enough for the watch streak"
+        if streamer.stream.minute_watched >= WATCH_STREAK_MINUTES:
+            return "watch streak watch-time limit reached (reward not confirmed)"
     if previous_reason == WATCH_REASONS[Priority.DROPS] and not streamer.drops_condition():
         return "drop earned"
     return "a higher priority channel took the slot"
@@ -1013,7 +1015,8 @@ class Twitch(object):
                     elif prior == Priority.STREAK and len(streamers_watching) < 2:
                         """
                         Give eligible streaks priority until the reward is confirmed
-                        or seven watched minutes have been recorded.
+                        or eight watched minutes have been recorded (including a
+                        one-minute safety margin).
                         Viewers receive points for returning for x consecutive streams.
                         Each stream must be at least 10 minutes long and it must have been at least 30 minutes since the last stream ended.
                         """
@@ -1030,7 +1033,8 @@ class Twitch(object):
                                     )
                                     > 30
                                 )
-                                and streamers[index].stream.minute_watched < 7
+                                and streamers[index].stream.minute_watched
+                                < WATCH_STREAK_MINUTES
                             ):
                                 streamers_watching.append(index)
                                 reasons.setdefault(
@@ -1076,6 +1080,9 @@ class Twitch(object):
                 We take the first two streamers from the list as they have the highest priority (based on order or WatchStreak).
                 """
                 streamers_watching = streamers_watching[:2]
+                for index, streamer in enumerate(streamers):
+                    if index not in streamers_watching:
+                        streamer.stream.pause_minute_watched()
                 if drop_streamer is not None and not any(
                     streamers[index] is drop_streamer for index in streamers_watching
                 ):
@@ -1151,11 +1158,21 @@ class Twitch(object):
                                                 "\n".join(drop_messages),
                                                 Events.DROP_STATUS,
                                             )
+                        else:
+                            streamers[index].stream.pause_minute_watched()
+                            logger.warning(
+                                "Watch request for %s failed (HTTP %s); "
+                                "pausing the watch-time counter",
+                                streamers[index].username,
+                                response.status_code,
+                            )
 
                     except requests.exceptions.ConnectionError as e:
+                        streamers[index].stream.pause_minute_watched()
                         logger.error(f"Error while trying to send minute watched: {e}")
                         self.__check_connection_handler(chunk_size)
                     except requests.exceptions.Timeout as e:
+                        streamers[index].stream.pause_minute_watched()
                         logger.error(f"Error while trying to send minute watched: {e}")
 
                     # Keep "playing" the video of every watched channel between the
@@ -1177,7 +1194,11 @@ class Twitch(object):
                 if streamers_watching == []:
                     self.__chuncked_sleep(60, chunk_size=chunk_size)
             except Exception:
+                for streamer in streamers:
+                    streamer.stream.pause_minute_watched()
                 logger.error("Exception raised in send minute watched", exc_info=True)
+        for streamer in streamers:
+            streamer.stream.pause_minute_watched()
 
     # === CHANNEL POINTS / PREDICTION === #
     # Load the amount of current points for a channel, check if a bonus is available

@@ -95,11 +95,13 @@ class Stream(object):
     def init_watch_streak(self):
         self.watch_streak_missing = True
         self.minute_watched = 0
-        self.__minute_watched_timestamp = 0
+        self.pause_minute_watched()
+
+    def pause_minute_watched(self):
+        self.__minute_watched_timestamp = None
 
     def update_minute_watched(self):
-        if self.__minute_watched_timestamp != 0:
-            self.minute_watched += round(
-                (time.time() - self.__minute_watched_timestamp) / 60, 5
-            )
-        self.__minute_watched_timestamp = time.time()
+        now = time.monotonic()
+        if self.__minute_watched_timestamp is not None:
+            self.minute_watched += (now - self.__minute_watched_timestamp) / 60
+        self.__minute_watched_timestamp = now

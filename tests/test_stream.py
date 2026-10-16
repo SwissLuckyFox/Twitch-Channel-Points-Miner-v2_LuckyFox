@@ -15,6 +15,36 @@ TWITCH_SOURCE = Path(twitch_module.__file__)
 
 
 class StreamTests(unittest.TestCase):
+    def test_watch_time_counts_only_between_successful_events(self):
+        stream = Stream()
+        with patch(
+            "TwitchChannelPointsMiner.classes.entities.Stream.time.monotonic",
+            side_effect=[0, 60, 660, 720],
+        ):
+            stream.update_minute_watched()
+            self.assertEqual(stream.minute_watched, 0)
+            stream.update_minute_watched()
+            self.assertEqual(stream.minute_watched, 1)
+            stream.pause_minute_watched()
+            stream.update_minute_watched()
+            self.assertEqual(stream.minute_watched, 1)
+            stream.update_minute_watched()
+            self.assertEqual(stream.minute_watched, 2)
+
+    def test_new_streak_resets_watch_time_and_timestamp(self):
+        stream = Stream()
+        with patch(
+            "TwitchChannelPointsMiner.classes.entities.Stream.time.monotonic",
+            side_effect=[0, 60, 660],
+        ):
+            stream.update_minute_watched()
+            stream.update_minute_watched()
+            stream.watch_streak_missing = False
+            stream.init_watch_streak()
+            stream.update_minute_watched()
+        self.assertEqual(stream.minute_watched, 0)
+        self.assertTrue(stream.watch_streak_missing)
+
     def test_game_id_from_game_dict(self):
         stream = Stream()
         stream.game = {"id": "509658", "name": "Just Chatting"}
@@ -49,6 +79,19 @@ class StreamerOfflineNotificationTests(unittest.TestCase):
         record = self._offline_record(streamer)
         self.assertFalse(hasattr(record, "skip_telegram"))
         self.assertFalse(streamer.is_online)
+
+    def test_going_offline_pauses_watch_time(self):
+        streamer = Streamer("someone")
+        streamer.is_online = True
+        with patch(
+            "TwitchChannelPointsMiner.classes.entities.Stream.time.monotonic",
+            side_effect=[0, 60, 660],
+        ):
+            streamer.stream.update_minute_watched()
+            streamer.stream.update_minute_watched()
+            self._offline_record(streamer)
+            streamer.stream.update_minute_watched()
+        self.assertEqual(streamer.stream.minute_watched, 1)
 
     def test_repeated_offline_check_of_discovered_channel_is_debug_only(self):
         streamer = Streamer("someone")

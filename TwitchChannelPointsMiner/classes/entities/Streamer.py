@@ -117,6 +117,7 @@ class Streamer(object):
         )
 
     def set_offline(self):
+        self.stream.pause_minute_watched()
         went_offline = self.is_online is True
         if went_offline:
             self.offline_at = time.time()

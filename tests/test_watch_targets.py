@@ -1,7 +1,12 @@
 import unittest
+from unittest.mock import Mock, patch
+
+import requests
 
 from TwitchChannelPointsMiner.classes.Settings import Priority
 from TwitchChannelPointsMiner.classes.Twitch import (
+    Twitch,
+    WATCH_STREAK_MINUTES,
     WATCH_REASONS,
     describe_watch_change,
 )
@@ -48,6 +53,13 @@ class DescribeWatchChangeTests(unittest.TestCase):
         self.assertIn("Stopped mining carol: watch streak collected", message)
         self.assertIn("Started mining alice: subscription points bonus", message)
 
+    def test_time_limit_does_not_claim_reward_was_collected(self):
+        alice = online("alice")
+        alice.stream.minute_watched = WATCH_STREAK_MINUTES
+        message = describe_watch_change({"alice": (alice, STREAK)}, {})
+        self.assertIn("watch-time limit reached (reward not confirmed)", message)
+        self.assertNotIn("watch streak collected", message)
+
     def test_offline_and_nothing_left(self):
         alice = online("alice")
         alice.is_online = False
@@ -59,6 +71,106 @@ class DescribeWatchChangeTests(unittest.TestCase):
         alice = online("alice")
         message = describe_watch_change({"alice": (alice, ORDER)}, {"alice": (alice, STREAK)})
         self.assertIn("Still mining alice, now for: watch streak (was: streamer list priority)", message)
+
+
+class StreakWatchLoopTests(unittest.TestCase):
+    def run_iteration(self, streamers, priority, response=None, after_request=None):
+        twitch = Twitch.__new__(Twitch)
+        twitch.running = True
+        twitch.user_agent = "test"
+        targets = []
+
+        def report_targets(previous, current):
+            targets.append(current)
+            return current
+
+        def stop(*args, **kwargs):
+            twitch.running = False
+            if after_request is not None:
+                after_request()
+
+        response = response if response is not None else Mock(status_code=204)
+        with patch.object(
+            Twitch, "check_streamer_online"
+        ), patch.object(
+            Twitch, "_Twitch__log_watch_targets", side_effect=report_targets
+        ), patch.object(
+            Twitch, "_Twitch__report_video", side_effect=stop
+        ), patch.object(
+            Twitch, "_Twitch__chuncked_sleep", side_effect=stop
+        ), patch.object(
+            Twitch, "_Twitch__check_connection_handler"
+        ), patch.object(
+            Streamer, "__str__", lambda self: self.username
+        ), patch(
+            "TwitchChannelPointsMiner.classes.Twitch.requests.post",
+            side_effect=[response],
+        ):
+            twitch.send_minute_watched_events(streamers, priority)
+        self.assertEqual(len(targets), 1)
+        return targets[0]
+
+    def test_streak_priority_uses_eight_minute_cutoff(self):
+        self.assertEqual(WATCH_STREAK_MINUTES, 8)
+        for minutes, expected in [(7, True), (7.99, True), (8, False)]:
+            with self.subTest(minutes=minutes):
+                alice = online("alice")
+                alice.settings.watch_streak = True
+                alice.stream.minute_watched = minutes
+                targets = self.run_iteration([alice], [Priority.STREAK])
+                self.assertEqual("alice" in targets, expected)
+
+    def test_confirmed_streak_releases_priority_before_cutoff(self):
+        alice = online("alice")
+        alice.settings.watch_streak = True
+        alice.stream.watch_streak_missing = False
+        self.assertEqual(self.run_iteration([alice], [Priority.STREAK]), {})
+
+    def test_deselected_channel_does_not_count_gap(self):
+        alice, bob = online("alice"), online("bob")
+        alice.settings.watch_streak = False
+        bob.settings.watch_streak = True
+        with patch(
+            "TwitchChannelPointsMiner.classes.entities.Stream.time.monotonic",
+            side_effect=[0, 60, 660, 720],
+        ):
+            alice.stream.update_minute_watched()
+            alice.stream.update_minute_watched()
+            observed = []
+
+            def resume():
+                alice.stream.update_minute_watched()
+                observed.append(alice.stream.minute_watched)
+
+            self.run_iteration(
+                [alice, bob], [Priority.STREAK], after_request=resume
+            )
+            self.assertEqual(observed, [1])
+
+    def test_failed_requests_do_not_count_gap(self):
+        for response in (
+            Mock(status_code=500),
+            requests.exceptions.ConnectionError("test"),
+            requests.exceptions.Timeout("test"),
+        ):
+            with self.subTest(response=response):
+                alice = online("alice")
+                with patch(
+                    "TwitchChannelPointsMiner.classes.entities.Stream.time.monotonic",
+                    side_effect=[0, 60, 660],
+                ):
+                    alice.stream.update_minute_watched()
+                    alice.stream.update_minute_watched()
+                    observed = []
+
+                    def resume():
+                        alice.stream.update_minute_watched()
+                        observed.append(alice.stream.minute_watched)
+
+                    self.run_iteration(
+                        [alice], [Priority.ORDER], response, after_request=resume
+                    )
+                    self.assertEqual(observed, [1])
 
 
 if __name__ == "__main__":
