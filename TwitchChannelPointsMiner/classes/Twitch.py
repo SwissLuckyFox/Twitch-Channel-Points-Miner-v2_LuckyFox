@@ -966,6 +966,10 @@ class Twitch(object):
                     for i in range(0, len(streamers))
                     if streamers[i].is_online is True
                     and (
+                        not streamers[i].drops_only
+                        or streamers[i].drops_condition()
+                    )
+                    and (
                         streamers[i].online_at == 0
                         or (time.time() - streamers[i].online_at) > 30
                     )
@@ -1460,6 +1464,14 @@ class Twitch(object):
             for event in (inventory.get("gameEventDrops") or [])
             if isinstance(event, dict) and event.get("id")
         }
+        owned_badges = (
+            self.get_owned_badges()
+            if any(drop.badge_titles for campaign in campaigns for drop in campaign.drops)
+            else None
+        )
+        owned_sets, owned_titles = (
+            owned_badges if owned_badges is not None else (set(), set())
+        )
 
         # Iterate all campaigns from dashboard (only active, with working drops)
         # In this array we have also the campaigns never started from us (not in inventory)
@@ -1468,8 +1480,13 @@ class Twitch(object):
             if progress is not None:
                 campaign.in_inventory = True
                 campaign.sync_drops(progress.get("timeBasedDrops") or [], self.claim_drop)
-            else:
-                campaign.mark_claimed_from_benefits(claimed_benefits)
+            campaign.mark_claimed_from_benefits(claimed_benefits)
+            for drop in campaign.drops:
+                drop.mark_claimed_from_badges(owned_titles)
+            if campaign.id.startswith(STREAMDB_PREFIX):
+                set_id = campaign.id[len(STREAMDB_PREFIX) :].rsplit(":", 1)[0]
+                if set_id.strip().lower() in owned_sets:
+                    campaign.drops = []
             campaign.clear_drops()  # Remove all the claimed drops
         return campaigns
 
@@ -1552,6 +1569,7 @@ class Twitch(object):
         streamer = Streamer(login)
         streamer.channel_id = channel_id
         streamer.notify = False
+        streamer.drops_only = True
         streamer.settings = StreamerSettings(
             make_predictions=False,
             follow_raid=False,
@@ -1697,10 +1715,13 @@ class Twitch(object):
         try:
             owned = response["data"]["currentUser"]["availableBadges"]
         except (KeyError, TypeError):
-            logger.debug(
+            logger.warning(
                 "Drop scan: could not read the account's badges.%s",
                 _graphql_error_details(response),
             )
+            return None
+        if not isinstance(owned, list):
+            logger.warning("Drop scan: Twitch returned no account badge list")
             return None
         set_ids, titles = set(), set()
         for badge in owned or []:

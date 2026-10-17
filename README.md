@@ -390,7 +390,7 @@ Most of the settings are self-explained and are commented on in the example.
 You can watch only two streamers per time. With `priority` settings, you can select which streamers watch by use priority. You can use an array of priority or single item. I suggest using at least one priority from `ORDER`, `POINTS_ASCENDING`, `POINTS_DESCEDING` because, for example, If you set only `STREAK` after catch all watch streak, the script will stop to watch streamers.
 Available values are the following:
  - `STREAK` - Catch the watch streak from all streamers. Eligible channels keep streak priority until Twitch confirms the reward or eight watched minutes are recorded (seven minutes plus a one-minute safety margin). Switching away, going offline, or a failed watch request pauses the counter so gaps are not counted. The time limit alone does not confirm that Twitch awarded the streak.
- - `DROPS` - Prioritize configured streamers and automatically discovered campaign channels with active, unclaimed timed drops. Discovery uses the channel IDs Twitch provides for each campaign.
+ - `DROPS` - Prioritize configured streamers and automatically discovered campaign channels with active, unclaimed timed drops. Discovery uses the channel IDs Twitch provides for each campaign. Every inventory sync also checks awarded rewards and owned global chat badges, including campaigns discovered through live channels. Automatically added drop-only channels stop being watched when no unclaimed drops remain; configured channels can still be watched for other priorities.
  - `SUBSCRIBED` - Prioritize streamers you're subscribed to (higher subscription tiers are mined first)
  - `ORDER` - Following the order of the list
  - `POINTS_ASCENDING` - On top the streamers with the lowest points

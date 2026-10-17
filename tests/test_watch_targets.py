@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 import requests
 
 from TwitchChannelPointsMiner.classes.Settings import Priority
+from TwitchChannelPointsMiner.classes.entities.Campaign import Campaign
 from TwitchChannelPointsMiner.classes.Twitch import (
     Twitch,
     WATCH_STREAK_MINUTES,
@@ -125,6 +126,39 @@ class StreakWatchLoopTests(unittest.TestCase):
         alice.settings.watch_streak = True
         alice.stream.watch_streak_missing = False
         self.assertEqual(self.run_iteration([alice], [Priority.STREAK]), {})
+
+    def test_finished_auto_drop_channel_is_not_selected_by_other_priorities(self):
+        for priority in (
+            Priority.ORDER,
+            Priority.SUBSCRIBED,
+            Priority.STREAK,
+            Priority.POINTS_ASCENDING,
+            Priority.POINTS_DESCEDING,
+        ):
+            with self.subTest(priority=priority):
+                unter = online("unter")
+                unter.drops_only = True
+                unter.settings.watch_streak = True
+                unter.activeMultipliers = [{"factor": 2}]
+                self.assertEqual(
+                    self.run_iteration([unter], [Priority.DROPS, priority]), {}
+                )
+
+    def test_configured_channel_without_drops_still_earns_points(self):
+        alice = online("alice")
+        targets = self.run_iteration([alice], [Priority.DROPS, Priority.ORDER])
+        self.assertEqual(targets, {"alice": (alice, ORDER)})
+
+    def test_auto_drop_channel_with_open_drop_is_still_selected(self):
+        from test_drops import campaign_data, drop_data
+
+        unter = online("unter")
+        unter.drops_only = True
+        unter.stream.campaigns = [Campaign(campaign_data([drop_data()]))]
+        targets = self.run_iteration([unter], [Priority.DROPS, Priority.ORDER])
+        self.assertEqual(
+            targets, {"unter": (unter, WATCH_REASONS[Priority.DROPS])}
+        )
 
     def test_deselected_channel_does_not_count_gap(self):
         alice, bob = online("alice"), online("bob")

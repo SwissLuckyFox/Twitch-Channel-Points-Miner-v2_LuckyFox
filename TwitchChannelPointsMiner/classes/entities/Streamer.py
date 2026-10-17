@@ -79,6 +79,7 @@ class Streamer(object):
         "streamer_url",
         "mutex",
         "notify",
+        "drops_only",
     ]
 
     def __init__(self, username, settings=None):
@@ -105,6 +106,7 @@ class Streamer(object):
         self.mutex = Lock()
         # False for channels the miner added on its own (e.g. to farm a drop).
         self.notify = True
+        self.drops_only = False
 
     def __repr__(self):
         return f"Streamer(username={self.username}, channel_id={self.channel_id}, channel_points={_millify(self.channel_points)})"

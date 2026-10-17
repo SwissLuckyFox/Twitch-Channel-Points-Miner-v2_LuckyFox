@@ -156,6 +156,24 @@ def badge(**overrides):
 
 
 class BadgeFallbackCampaignTests(unittest.TestCase):
+    def test_missing_owned_badge_list_is_not_treated_as_empty(self):
+        from unittest.mock import patch
+
+        from TwitchChannelPointsMiner.classes.Twitch import Twitch
+
+        twitch = object.__new__(Twitch)
+        response = {"data": {"currentUser": {"availableBadges": None}}}
+        with patch.object(
+            Twitch, "post_gql_request", return_value=response
+        ), self.assertLogs(
+            "TwitchChannelPointsMiner.classes.Twitch", level="WARNING"
+        ):
+            self.assertIsNone(twitch.get_owned_badges())
+
+        response["data"]["currentUser"]["availableBadges"] = []
+        with patch.object(Twitch, "post_gql_request", return_value=response):
+            self.assertEqual(twitch.get_owned_badges(), (set(), set()))
+
     def test_badge_becomes_any_channel_watch_campaign(self):
         from TwitchChannelPointsMiner.classes import Twitch as twitch_module
         from TwitchChannelPointsMiner.classes.entities.Campaign import Campaign

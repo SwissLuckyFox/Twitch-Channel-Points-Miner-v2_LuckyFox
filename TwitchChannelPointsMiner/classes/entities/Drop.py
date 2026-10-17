@@ -26,6 +26,7 @@ class Drop(object):
         "benefit",
         "benefit_ids",
         "benefit_types",
+        "badge_titles",
         "minutes_required",
         "required_subs",
         "has_preconditions_met",
@@ -55,6 +56,15 @@ class Drop(object):
         self.benefit_types = [
             b["distributionType"] for b in benefits if b.get("distributionType")
         ]
+        self.badge_titles = (
+            {benefit["name"].strip().lower() for benefit in benefits}
+            if benefits
+            and all(
+                benefit.get("distributionType") == "BADGE" and benefit.get("name")
+                for benefit in benefits
+            )
+            else set()
+        )
         self.minutes_required = data.get("requiredMinutesWatched") or 0
         self.required_subs = data.get("requiredSubs") or 0
 
@@ -99,6 +109,10 @@ class Drop(object):
             awarded_at is not None and self.start_at <= awarded_at < self.end_at
             for awarded_at in awarded
         ):
+            self.is_claimed = True
+
+    def mark_claimed_from_badges(self, owned_titles):
+        if self.badge_titles and self.badge_titles <= owned_titles:
             self.is_claimed = True
 
     def update(

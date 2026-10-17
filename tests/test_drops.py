@@ -150,6 +150,38 @@ class ClaimedBenefitTests(unittest.TestCase):
         )
         self.assertIsNone(parse_twitch_datetime(None))
 
+    def test_all_badge_rewards_must_be_owned(self):
+        data = drop_data()
+        data["benefitEdges"].append(
+            {
+                "benefit": {
+                    "id": "benefit-2",
+                    "name": "Second badge",
+                    "distributionType": "BADGE",
+                }
+            }
+        )
+        drop = Drop(data)
+        drop.mark_claimed_from_badges({"alien: isolation horror"})
+        self.assertFalse(drop.is_claimed)
+        drop.mark_claimed_from_badges({"alien: isolation horror", "second badge"})
+        self.assertTrue(drop.is_claimed)
+
+    def test_mixed_rewards_are_not_completed_by_badge_ownership(self):
+        data = drop_data()
+        data["benefitEdges"].append(
+            {
+                "benefit": {
+                    "id": "benefit-2",
+                    "name": "Game item",
+                    "distributionType": "DIRECT_ENTITLEMENT",
+                }
+            }
+        )
+        drop = Drop(data)
+        drop.mark_claimed_from_badges({"alien: isolation horror", "game item"})
+        self.assertFalse(drop.is_claimed)
+
 
 class DropsConditionTests(unittest.TestCase):
     def _streamer(self):
@@ -184,8 +216,10 @@ class InventorySyncTests(unittest.TestCase):
     def setUp(self):
         self.twitch = object.__new__(Twitch)
 
-    def _sync(self, inventory, campaigns):
-        with patch.object(Twitch, "_Twitch__get_inventory", return_value=inventory):
+    def _sync(self, inventory, campaigns, owned_badges=None):
+        with patch.object(
+            Twitch, "_Twitch__get_inventory", return_value=inventory
+        ), patch.object(Twitch, "get_owned_badges", return_value=owned_badges):
             return self.twitch._Twitch__sync_campaigns(campaigns)
 
     def test_completed_campaign_from_game_event_drops_is_cleared(self):
@@ -207,10 +241,108 @@ class InventorySyncTests(unittest.TestCase):
         result = self._sync({"dropCampaignsInProgress": [], "gameEventDrops": []}, [campaign])
         self.assertEqual(len(result[0].drops), 1)
 
+    def test_awarded_reward_is_checked_even_when_campaign_is_in_progress(self):
+        campaign = Campaign(campaign_data([drop_data()]))
+        inventory = {
+            "dropCampaignsInProgress": [{"id": campaign.id, "timeBasedDrops": []}],
+            "gameEventDrops": [
+                {"id": "benefit-1", "lastAwardedAt": datetime.now().strftime(FMT)}
+            ],
+        }
+        self.assertEqual(self._sync(inventory, [campaign])[0].drops, [])
+
+    def test_owned_badge_clears_discovered_campaign_without_inventory_reward(self):
+        data = twitch_module._campaign_from_available_drops(
+            available_drops_entry(), {"id": "42", "name": "unter"}
+        )
+        campaign = Campaign(data)
+        streamer = Streamer("unter", settings=StreamerSettings(claim_drops=True))
+        streamer.is_online = True
+        streamer.stream.campaigns = [campaign]
+        self.assertTrue(streamer.drops_condition())
+
+        self._sync(
+            {"dropCampaignsInProgress": [], "gameEventDrops": []},
+            [campaign],
+            ({"owned-badge"}, {"alien: isolation horror"}),
+        )
+
+        self.assertEqual(campaign.drops, [])
+        self.assertFalse(streamer.drops_condition())
+
+    def test_badge_earned_after_discovery_is_removed_on_next_sync(self):
+        campaign = Campaign(campaign_data([drop_data()]))
+        inventory = {"dropCampaignsInProgress": [], "gameEventDrops": []}
+        self._sync(inventory, [campaign], (set(), set()))
+        self.assertEqual(len(campaign.drops), 1)
+        self._sync(
+            inventory, [campaign], ({"owned-badge"}, {"alien: isolation horror"})
+        )
+        self.assertEqual(campaign.drops, [])
+
+    def test_owned_badge_does_not_remove_game_item_with_same_name(self):
+        campaign = Campaign(
+            campaign_data([drop_data(distribution="DIRECT_ENTITLEMENT")])
+        )
+        self._sync({}, [campaign], ({"owned-badge"}, {"alien: isolation horror"}))
+        self.assertEqual(len(campaign.drops), 1)
+
+    def test_owned_badge_only_removes_matching_drop(self):
+        unowned = drop_data("drop-2", benefit_id="benefit-2")
+        unowned["benefitEdges"][0]["benefit"]["name"] = "Another badge"
+        campaign = Campaign(campaign_data([drop_data(), unowned]))
+        self._sync({}, [campaign], ({"owned-badge"}, {"alien: isolation horror"}))
+        self.assertEqual([drop.id for drop in campaign.drops], ["drop-2"])
+
+    def test_unavailable_badge_query_keeps_unconfirmed_drops(self):
+        campaign = Campaign(campaign_data([drop_data()]))
+        self._sync({}, [campaign], None)
+        self.assertEqual(len(campaign.drops), 1)
+
+    def test_owned_fallback_badge_is_matched_by_set_id(self):
+        data = campaign_data([drop_data()])
+        data["id"] = f"{twitch_module.STREAMDB_PREFIX}owned-set:12345"
+        campaign = Campaign(data)
+        self._sync({}, [campaign], ({"owned-set"}, {"different twitch title"}))
+        self.assertEqual(campaign.drops, [])
+
+    def test_owned_badge_overrides_stale_inventory_progress(self):
+        campaign = Campaign(campaign_data([drop_data()]))
+        inventory = {
+            "dropCampaignsInProgress": [
+                {
+                    "id": campaign.id,
+                    "timeBasedDrops": [
+                        {
+                            "id": "drop-1",
+                            "self": {
+                                "hasPreconditionsMet": True,
+                                "currentMinutesWatched": 0,
+                                "dropInstanceID": None,
+                                "isClaimed": False,
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        self._sync(inventory, [campaign], (set(), {"alien: isolation horror"}))
+        self.assertEqual(campaign.drops, [])
+
 
 class DirectoryDiscoveryTests(unittest.TestCase):
     def setUp(self):
         self.twitch = object.__new__(Twitch)
+
+    def test_discovered_channels_are_only_watched_for_drops(self):
+        streamers, discovered = [], {}
+        streamer = self.twitch._Twitch__add_drop_streamer(
+            streamers, discovered, "42", "unter"
+        )
+        self.assertTrue(streamer.drops_only)
+        self.assertFalse(streamer.notify)
+        self.assertEqual(streamers, [streamer])
+        self.assertIs(discovered["42"], streamer)
 
     def test_game_slug(self):
         self.assertEqual(twitch_module._game_slug("Alien: Isolation"), "alien-isolation")
