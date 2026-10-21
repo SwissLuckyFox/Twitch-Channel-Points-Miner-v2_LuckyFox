@@ -259,7 +259,7 @@ class TelegramPinTests(unittest.TestCase):
                 telegram.send("Badge", Events.DROP_CLAIM, highlight=True, pin_key=key)
             telegram.flush()
         self.assertEqual(len(logs.records), 1)
-        self.assertIn("Pin messages", logs.output[0])
+        self.assertIn("private chats need nothing", logs.output[0])
         self.assertFalse(os.path.exists(self.state))
 
     @patch("TwitchChannelPointsMiner.classes.Telegram.requests.post")

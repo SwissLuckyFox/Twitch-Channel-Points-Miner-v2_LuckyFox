@@ -5,6 +5,7 @@
 
 
 import copy
+import json
 import logging
 import os
 import random
@@ -66,6 +67,8 @@ STREAMDB_PREFIX = "streamdb:"
 STREAM_WATCH_INTERVAL = 20
 STREAM_PLAYLIST_TTL = 5 * 60
 STREAM_CHUNKS_PER_LOAD = 20
+# Drops whose claim was already announced on Telegram/Discord (kept across restarts).
+ANNOUNCED_DROPS_LIMIT = 1000
 # Seven watched minutes plus a one-minute buffer for Twitch's progress tracking.
 WATCH_STREAK_MINUTES = 8
 
@@ -464,6 +467,7 @@ class Twitch(object):
         "client_version",
         "client_version_loaded",
         "twilight_build_id_pattern",
+        "announced_drops",
     ]
 
     def __init__(self, username, user_agent, password=None):
@@ -1519,23 +1523,67 @@ class Twitch(object):
             campaign.clear_drops()  # Remove all the claimed drops
         return campaigns
 
+    def __announced_drops_file(self):
+        folder = getattr(Settings, "analytics_path", None)
+        return os.path.join(folder, "announced_drops.json") if folder else None
+
+    def __load_announced_drops(self):
+        announced = getattr(self, "announced_drops", None)
+        if announced is None:
+            announced = {}
+            path = self.__announced_drops_file()
+            if path and os.path.isfile(path):
+                try:
+                    with open(path, encoding="utf-8") as file:
+                        stored = json.load(file)
+                    if isinstance(stored, dict):
+                        announced = {str(k): v is True for k, v in stored.items()}
+                except (OSError, ValueError):
+                    logger.debug("Could not read announced drops", exc_info=True)
+            self.announced_drops = announced
+        return announced
+
+    def __save_announced_drops(self):
+        path = self.__announced_drops_file()
+        if not path:
+            return
+        announced = self.announced_drops
+        # Insertion order is kept, so the oldest entries are dropped first.
+        while len(announced) > ANNOUNCED_DROPS_LIMIT:
+            announced.pop(next(iter(announced)))
+        try:
+            with open(path, "w", encoding="utf-8") as file:
+                json.dump(announced, file)
+        except OSError:
+            logger.debug("Could not save announced drops", exc_info=True)
+
     def claim_drop(self, drop):
         claimed = self.__request_claim_drop(drop)
+        announced = self.__load_announced_drops()
+        # Twitch keeps offering unclaimable drops (e.g. no linked game account), so
+        # notify once per drop, and once more if a retry finally succeeds.
+        notify = drop.id not in announced or (claimed and not announced[drop.id])
+        extra = {"event": Events.DROP_CLAIM}
+        if not notify:
+            extra.update(skip_telegram=True, skip_discord=True)
+
         if claimed and drop.is_badge_or_emote:
             kind = "Badge" if "BADGE" in drop.benefit_types else "Emote"
-            logger.info(
-                f"{kind} drop claimed: {drop.benefit or drop.name}\n{drop}",
-                extra={
-                    "emoji": ":medal:",
-                    "event": Events.DROP_CLAIM,
-                    "telegram_highlight": True,
-                    "telegram_pin_key": drop.id,
-                },
+            message = f"{kind} drop claimed: {drop.benefit or drop.name}\n{drop}"
+            extra.update(
+                emoji=":medal:", telegram_highlight=True, telegram_pin_key=drop.id
             )
+        elif claimed:
+            message = f"Claimed {drop}"
+            extra["emoji"] = ":package:"
         else:
-            logger.info(
-                f"Claim {drop}", extra={"emoji": ":package:", "event": Events.DROP_CLAIM}
-            )
+            message = f"Could not claim {drop} yet, retrying silently"
+            extra["emoji"] = ":package:"
+
+        logger.log(logging.INFO if notify else logging.DEBUG, message, extra=extra)
+        if notify:
+            announced[drop.id] = claimed is True
+            self.__save_announced_drops()
         return claimed
 
     def __request_claim_drop(self, drop):

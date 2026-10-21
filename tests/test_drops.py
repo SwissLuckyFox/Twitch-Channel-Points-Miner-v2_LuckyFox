@@ -1,3 +1,4 @@
+import tempfile
 import time
 import unittest
 from datetime import datetime, timedelta
@@ -10,6 +11,7 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import (
     Streamer,
     StreamerSettings,
 )
+from TwitchChannelPointsMiner.classes.Settings import Settings
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.constants import GQLOperations
 
@@ -184,28 +186,66 @@ class ClaimedBenefitTests(unittest.TestCase):
 
 
 class ClaimDropMessageTests(unittest.TestCase):
-    def claim(self, distribution, claimed):
-        twitch = Twitch.__new__(Twitch)
-        drop = Drop(drop_data(distribution=distribution))
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = folder.name
+        path = patch.object(Settings, "analytics_path", self.folder, create=True)
+        path.start()
+        self.addCleanup(path.stop)
+        self.twitch = Twitch.__new__(Twitch)
+
+    def claim(self, claimed, distribution="BADGE", drop_id="drop-1", twitch=None):
+        twitch = twitch or self.twitch
+        drop = Drop(drop_data(drop_id=drop_id, distribution=distribution))
         with patch.object(
             Twitch, "_Twitch__request_claim_drop", return_value=claimed
-        ), patch.object(Drop, "__str__", lambda self: self.name), self.assertLogs("TwitchChannelPointsMiner.classes.Twitch", "INFO") as logs:
+        ), patch.object(Drop, "__str__", lambda self: self.name), self.assertLogs(
+            "TwitchChannelPointsMiner.classes.Twitch", "DEBUG"
+        ) as logs:
             self.assertEqual(twitch.claim_drop(drop), claimed)
         return logs.records[-1]
 
+    def notified(self, record):
+        return record.levelname == "INFO" and not hasattr(record, "skip_telegram")
+
     def test_claimed_badge_is_highlighted_and_pinned(self):
-        record = self.claim("BADGE", True)
+        record = self.claim(True)
         self.assertTrue(record.getMessage().startswith("Badge drop claimed: Alien"))
         self.assertTrue(record.telegram_highlight)
         self.assertEqual(record.telegram_pin_key, "drop-1")
 
     def test_game_item_and_failed_badge_claim_are_plain(self):
-        for distribution, claimed in (("DIRECT_ENTITLEMENT", True), ("BADGE", False)):
+        for drop_id, distribution, claimed in (
+            ("item", "DIRECT_ENTITLEMENT", True),
+            ("badge", "BADGE", False),
+        ):
             with self.subTest(distribution=distribution):
-                record = self.claim(distribution, claimed)
-                self.assertTrue(record.getMessage().startswith("Claim "))
+                record = self.claim(claimed, distribution, drop_id)
                 self.assertFalse(hasattr(record, "telegram_highlight"))
                 self.assertFalse(hasattr(record, "telegram_pin_key"))
+
+    def test_repeated_failed_claim_is_announced_once(self):
+        self.assertTrue(self.notified(self.claim(False)))
+        for _ in range(3):
+            record = self.claim(False)
+            self.assertEqual(record.levelname, "DEBUG")
+            self.assertTrue(record.skip_telegram)
+            self.assertTrue(record.skip_discord)
+        self.assertTrue(self.notified(self.claim(False, drop_id="drop-2")))
+
+    def test_success_after_failed_claim_is_announced_once_more(self):
+        self.claim(False)
+        record = self.claim(True)
+        self.assertTrue(self.notified(record))
+        self.assertTrue(record.telegram_highlight)
+        self.assertFalse(self.notified(self.claim(True)))
+
+    def test_announced_drops_survive_restart(self):
+        self.claim(False)
+        restarted = Twitch.__new__(Twitch)
+        self.assertFalse(self.notified(self.claim(False, twitch=restarted)))
+
 
 class DropsConditionTests(unittest.TestCase):
     def _streamer(self):

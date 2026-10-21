@@ -246,8 +246,9 @@ class Telegram(object):
         if not result or not result.get("ok"):
             description = (result or {}).get("description", "no response")
             message = (
-                f"Could not pin Telegram message ({description}). The bot must be an "
-                "admin of the chat with the 'Pin messages' right."
+                f"Could not pin Telegram message ({description}). In a group the bot "
+                "needs the 'Pin messages' admin right, in a channel the 'Edit "
+                "messages' admin right; private chats need nothing."
             )
             if message != self._pin_error:
                 self._pin_error = message
