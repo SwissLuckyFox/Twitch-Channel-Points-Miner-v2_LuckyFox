@@ -31,6 +31,18 @@ class StreamTests(unittest.TestCase):
             stream.update_minute_watched()
             self.assertEqual(stream.minute_watched, 2)
 
+    def test_slow_event_counts_at_most_one_minute(self):
+        stream = Stream()
+        with patch(
+            "TwitchChannelPointsMiner.classes.entities.Stream.time.monotonic",
+            side_effect=[0, 150, 180],
+        ):
+            stream.update_minute_watched()
+            stream.update_minute_watched()
+            self.assertEqual(stream.minute_watched, 1)
+            stream.update_minute_watched()
+            self.assertEqual(stream.minute_watched, 1.5)
+
     def test_new_streak_resets_watch_time_and_timestamp(self):
         stream = Stream()
         with patch(

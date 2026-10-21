@@ -103,5 +103,9 @@ class Stream(object):
     def update_minute_watched(self):
         now = time.monotonic()
         if self.__minute_watched_timestamp is not None:
-            self.minute_watched += (now - self.__minute_watched_timestamp) / 60
+            # Twitch credits one minute per minute-watched event, so a slow loop
+            # must not count more than that.
+            self.minute_watched += min(
+                (now - self.__minute_watched_timestamp) / 60, 1
+            )
         self.__minute_watched_timestamp = now

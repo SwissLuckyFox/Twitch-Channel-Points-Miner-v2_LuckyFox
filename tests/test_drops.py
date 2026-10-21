@@ -183,6 +183,30 @@ class ClaimedBenefitTests(unittest.TestCase):
         self.assertFalse(drop.is_claimed)
 
 
+class ClaimDropMessageTests(unittest.TestCase):
+    def claim(self, distribution, claimed):
+        twitch = Twitch.__new__(Twitch)
+        drop = Drop(drop_data(distribution=distribution))
+        with patch.object(
+            Twitch, "_Twitch__request_claim_drop", return_value=claimed
+        ), patch.object(Drop, "__str__", lambda self: self.name), self.assertLogs("TwitchChannelPointsMiner.classes.Twitch", "INFO") as logs:
+            self.assertEqual(twitch.claim_drop(drop), claimed)
+        return logs.records[-1]
+
+    def test_claimed_badge_is_highlighted_and_pinned(self):
+        record = self.claim("BADGE", True)
+        self.assertTrue(record.getMessage().startswith("Badge drop claimed: Alien"))
+        self.assertTrue(record.telegram_highlight)
+        self.assertEqual(record.telegram_pin_key, "drop-1")
+
+    def test_game_item_and_failed_badge_claim_are_plain(self):
+        for distribution, claimed in (("DIRECT_ENTITLEMENT", True), ("BADGE", False)):
+            with self.subTest(distribution=distribution):
+                record = self.claim(distribution, claimed)
+                self.assertTrue(record.getMessage().startswith("Claim "))
+                self.assertFalse(hasattr(record, "telegram_highlight"))
+                self.assertFalse(hasattr(record, "telegram_pin_key"))
+
 class DropsConditionTests(unittest.TestCase):
     def _streamer(self):
         streamer = Streamer("someone")

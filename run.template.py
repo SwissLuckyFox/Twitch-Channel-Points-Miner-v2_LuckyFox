@@ -37,6 +37,18 @@ if not logger.handlers:
     logger.addHandler(handler)
 
 
+def telegram_pin_limit():
+    value = os.getenv("TELEGRAM_PINNED_DROPS", "").strip()
+    if not value:
+        return 5
+    if not re.fullmatch(r"\d+", value):
+        logger.warning(
+            "TELEGRAM_PINNED_DROPS must be a whole number (0 disables pinning); using 5."
+        )
+        return 5
+    return int(value)
+
+
 def optional_telegram():
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -65,6 +77,7 @@ def optional_telegram():
     return Telegram(
         chat_id=int(chat_id),
         token=token,
+        pin_limit=telegram_pin_limit(),
         events=[
             Events.STREAMER_ONLINE,
             Events.STREAMER_OFFLINE,

@@ -366,7 +366,7 @@ If this is the first run and no Twitch cookie exists yet, the miner starts Twitc
 
 Choose any Unraid folder for your configuration, create a file named `streamers.txt` in it, and set the **Streamer list folder** host path in the Unraid template to that folder; the container path remains `/usr/src/app/user-config`. For example, use `/mnt/user/appdata/twitch-channel-points-miner-v2/config`. Mapping the folder (instead of the single file) ensures edits are picked up after a container restart, even when your editor replaces the file on save. Add one Twitch username per line. Blank lines and lines starting with `#` are ignored. An optional second value can set per-streamer chat behavior, for example `my_channel chat=ONLINE`; allowed values are `ALWAYS`, `NEVER`, `ONLINE`, and `OFFLINE`. Channels you follow on Twitch are mined as well; to skip one (for example a renamed or banned account), add a line `!username`. This file is stored in appdata, so your personal list remains unchanged when the image is updated. A ready-made example list is available in [`streamers.txt.example`](./streamers.txt.example).
 
-Configure `TWITCH_USERNAME`; optionally set `TELEGRAM_CHAT_ID`, `TELEGRAM_BOT_TOKEN`, and `DISCORD_WEBHOOK_URL` as container environment variables. To customize other script settings, edit `run.template.py` in the repository and publish a new image.
+Configure `TWITCH_USERNAME`; optionally set `TELEGRAM_CHAT_ID`, `TELEGRAM_BOT_TOKEN`, and `DISCORD_WEBHOOK_URL` as container environment variables. Claimed badge/emote drops are sent to Telegram in bold and pinned; `TELEGRAM_PINNED_DROPS` sets how many stay pinned (default `5`, `0` disables pinning). Pinning requires the bot to be an admin of the chat with the "Pin messages" right. To customize other script settings, edit `run.template.py` in the repository and publish a new image.
 
 To change the watching priority without rebuilding the image, set the **Mining priority** field (`MINING_PRIORITY`) in Unraid's container settings, then apply the changes to restart the container. For streaks first, then drops, subscriptions, and finally streamer-list order, use:
 
@@ -451,6 +451,8 @@ If you want to receive logs update on Telegram initiate a new Telegram class, el
 | `token`       	 | string           |        	| Telegram API token @BotFather                                      |
 | `events`   	         | list             |       	| Only these events will be sent to the chat. Array of Event. or str |
 | `disable_notification` | bool             | false   	| Revoke the notification (sound/vibration)                          |
+| `pin_limit`            | int              | 5       	| Claimed badge/emote drops are posted in bold and pinned; only the newest `pin_limit` stay pinned (0 disables pinning). The bot must be an admin with the "Pin messages" right |
+| `pin_state_file`       | string           | analytics folder | File that remembers which messages the bot pinned          |
 
 
 ```python

@@ -1,3 +1,6 @@
+import json
+import os
+import tempfile
 import threading
 import unittest
 from unittest.mock import Mock, patch
@@ -152,6 +155,120 @@ class TelegramTests(unittest.TestCase):
         self.telegram.send("hello", Events.BET_WIN)
         post.assert_not_called()
 
+
+
+def ok(result=None):
+    response = Mock(status_code=200)
+    response.json.return_value = {"ok": True, "result": result}
+    return response
+
+
+class TelegramPinTests(unittest.TestCase):
+    def setUp(self):
+        interval = patch(
+            "TwitchChannelPointsMiner.classes.Telegram.MIN_SEND_INTERVAL", 0
+        )
+        interval.start()
+        self.addCleanup(interval.stop)
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.state = os.path.join(folder.name, "pins.json")
+        self.message_ids = iter(range(1, 100))
+
+    def telegram(self, pin_limit=2):
+        return Telegram(
+            chat_id=123,
+            token="secret-bot-token",
+            events=[Events.DROP_CLAIM],
+            pin_limit=pin_limit,
+            pin_state_file=self.state,
+        )
+
+    def fake_api(self, url, data, timeout):
+        if url.endswith("/sendMessage"):
+            return ok({"message_id": next(self.message_ids)})
+        return ok(True)
+
+    def calls(self, post, method):
+        return [
+            c.kwargs["data"]
+            for c in post.call_args_list
+            if c.kwargs["url"].endswith("/" + method)
+        ]
+
+    @patch("TwitchChannelPointsMiner.classes.Telegram.requests.post")
+    def test_highlight_is_bold_and_escaped(self, post):
+        post.side_effect = lambda url, data, timeout: self.fake_api(url, data, timeout)
+        telegram = self.telegram()
+        telegram.send("Badge <x> & co\nline 2", Events.DROP_CLAIM, highlight=True)
+        telegram.flush()
+        data = self.calls(post, "sendMessage")[0]
+        self.assertEqual(data["parse_mode"], "HTML")
+        self.assertEqual(data["text"], "<b>Badge &lt;x&gt; &amp; co</b>\nline 2")
+        self.assertEqual(self.calls(post, "pinChatMessage"), [])
+
+    @patch("TwitchChannelPointsMiner.classes.Telegram.requests.post")
+    def test_keeps_only_newest_pins_and_never_pins_twice(self, post):
+        post.side_effect = lambda url, data, timeout: self.fake_api(url, data, timeout)
+        telegram = self.telegram(pin_limit=2)
+        for key in ("a", "b", "a", "c"):
+            telegram.send("Badge", Events.DROP_CLAIM, highlight=True, pin_key=key)
+        telegram.flush()
+
+        self.assertEqual(
+            [d["message_id"] for d in self.calls(post, "pinChatMessage")], [1, 2, 4]
+        )
+        self.assertEqual(
+            [d["message_id"] for d in self.calls(post, "unpinChatMessage")], [1]
+        )
+        with open(self.state, encoding="utf-8") as file:
+            stored = json.load(file)
+        self.assertEqual([p["key"] for p in stored["pins"]], ["b", "c"])
+
+    @patch("TwitchChannelPointsMiner.classes.Telegram.requests.post")
+    def test_pins_survive_restart(self, post):
+        post.side_effect = lambda url, data, timeout: self.fake_api(url, data, timeout)
+        first = self.telegram(pin_limit=1)
+        first.send("Badge", Events.DROP_CLAIM, highlight=True, pin_key="a")
+        first.flush()
+        second = self.telegram(pin_limit=1)
+        second.send("Badge", Events.DROP_CLAIM, highlight=True, pin_key="b")
+        second.flush()
+        self.assertEqual(
+            [d["message_id"] for d in self.calls(post, "unpinChatMessage")], [1]
+        )
+
+    @patch("TwitchChannelPointsMiner.classes.Telegram.requests.post")
+    def test_missing_pin_right_is_reported_once(self, post):
+        def api(url, data, timeout):
+            if url.endswith("/pinChatMessage"):
+                response = Mock(status_code=400)
+                response.json.return_value = {
+                    "ok": False,
+                    "description": "Bad Request: not enough rights",
+                }
+                return response
+            return self.fake_api(url, data, timeout)
+
+        post.side_effect = api
+        telegram = self.telegram()
+        with self.assertLogs(
+            "TwitchChannelPointsMiner.classes.Telegram", level="WARNING"
+        ) as logs:
+            for key in ("a", "b"):
+                telegram.send("Badge", Events.DROP_CLAIM, highlight=True, pin_key=key)
+            telegram.flush()
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("Pin messages", logs.output[0])
+        self.assertFalse(os.path.exists(self.state))
+
+    @patch("TwitchChannelPointsMiner.classes.Telegram.requests.post")
+    def test_pin_limit_zero_disables_pinning(self, post):
+        post.side_effect = lambda url, data, timeout: self.fake_api(url, data, timeout)
+        telegram = self.telegram(pin_limit=0)
+        telegram.send("Badge", Events.DROP_CLAIM, highlight=True, pin_key="a")
+        telegram.flush()
+        self.assertEqual(self.calls(post, "pinChatMessage"), [])
 
 if __name__ == "__main__":
     unittest.main()

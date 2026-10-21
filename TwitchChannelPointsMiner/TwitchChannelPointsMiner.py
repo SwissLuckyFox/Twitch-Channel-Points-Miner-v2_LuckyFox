@@ -50,6 +50,9 @@ logging.getLogger("irc.client").setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
 
+# Fallback live check for streamers whose PubSub "went live" message was missed.
+OFFLINE_RECHECK_SECONDS = 3 * 60
+
 
 class TwitchChannelPointsMiner:
     __slots__ = [
@@ -91,6 +94,13 @@ class TwitchChannelPointsMiner:
 
         # Set as global config
         Settings.logger = logger_settings
+        if (
+            logger_settings.telegram is not None
+            and logger_settings.telegram.pin_state_file is None
+        ):
+            logger_settings.telegram.pin_state_file = os.path.join(
+                Settings.analytics_path, "telegram_pins.json"
+            )
         Settings.require_linked_account = require_linked_account
 
         # Init as default all the missing values
@@ -330,6 +340,7 @@ class TwitchChannelPointsMiner:
                     )
 
             refresh_context = time.time()
+            recheck_offline = time.time()
             while self.running:
                 time.sleep(random.uniform(20, 60))
                 # Do an external control for WebSocket. Check if the thread is running
@@ -344,6 +355,10 @@ class TwitchChannelPointsMiner:
                             f"#{index} - The last PING was sent more than 10 minutes ago. Reconnecting to the WebSocket..."
                         )
                         WebSocketsPool.handle_reconnection(self.ws_pool.ws[index])
+
+                if time.time() - recheck_offline >= OFFLINE_RECHECK_SECONDS:
+                    recheck_offline = time.time()
+                    self.twitch.recheck_offline_streamers(self.streamers)
 
                 if ((time.time() - refresh_context) // 60) >= 30:
                     refresh_context = time.time()

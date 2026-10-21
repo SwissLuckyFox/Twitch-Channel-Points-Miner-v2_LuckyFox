@@ -142,7 +142,12 @@ class GlobalFormatter(logging.Formatter):
             and skip_telegram is False
             and self.settings.telegram.chat_id != 123456789
         ):
-            self.settings.telegram.send(record.msg, record.event)
+            self.settings.telegram.send(
+                record.msg,
+                record.event,
+                highlight=getattr(record, "telegram_highlight", False),
+                pin_key=getattr(record, "telegram_pin_key", None),
+            )
 
     def discord(self, record):
         skip_discord = False if hasattr(record, "skip_discord") is False else True

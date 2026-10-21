@@ -1,8 +1,10 @@
+import time
 import unittest
 from unittest.mock import Mock, patch
 
 import requests
 
+from TwitchChannelPointsMiner.classes.Exceptions import StreamerIsOfflineException
 from TwitchChannelPointsMiner.classes.Settings import Priority
 from TwitchChannelPointsMiner.classes.entities.Campaign import Campaign
 from TwitchChannelPointsMiner.classes.Twitch import (
@@ -205,6 +207,44 @@ class StreakWatchLoopTests(unittest.TestCase):
                         [alice], [Priority.ORDER], response, after_request=resume
                     )
                     self.assertEqual(observed, [1])
+
+
+class RecheckOfflineStreamersTests(unittest.TestCase):
+    def recheck(self, streamers, broadcast_ids):
+        twitch = Twitch.__new__(Twitch)
+        twitch.running = True
+        with patch.object(
+            Twitch, "get_broadcast_id", side_effect=broadcast_ids
+        ) as get_id, patch.object(
+            Twitch, "check_streamer_online"
+        ) as check, patch(
+            "TwitchChannelPointsMiner.classes.Twitch.time.sleep"
+        ):
+            twitch.recheck_offline_streamers(streamers)
+        return get_id, check
+
+    def offline(self, name):
+        streamer = Streamer(name, settings=StreamerSettings())
+        streamer.channel_id = name
+        return streamer
+
+    def test_missed_live_notification_is_picked_up(self):
+        alice, bob = self.offline("alice"), self.offline("bob")
+        _, check = self.recheck([alice, bob], [StreamerIsOfflineException, "123"])
+        check.assert_called_once_with(bob)
+
+    def test_skips_online_drop_only_and_recently_offline(self):
+        on, drops, recent = online("on"), self.offline("drops"), self.offline("recent")
+        drops.drops_only = True
+        recent.offline_at = time.time()
+        get_id, check = self.recheck([on, drops, recent], ["123"] * 3)
+        get_id.assert_not_called()
+        check.assert_not_called()
+
+    def test_failed_lookup_does_not_stop_the_check(self):
+        alice, bob = self.offline("alice"), self.offline("bob")
+        _, check = self.recheck([alice, bob], [KeyError("data"), "123"])
+        check.assert_called_once_with(bob)
 
 
 if __name__ == "__main__":

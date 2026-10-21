@@ -609,6 +609,35 @@ class Twitch(object):
             except StreamerIsOfflineException:
                 streamer.set_offline()
 
+    def recheck_offline_streamers(self, streamers):
+        """
+        Fallback for missed PubSub "stream-up"/"viewcount" messages: without it a
+        streamer that went live unnoticed is never watched (e.g. its watch streak).
+        """
+        for streamer in list(streamers):
+            if not self.running:
+                return
+            if (
+                streamer.is_online is True
+                or streamer.drops_only
+                or streamer.channel_id is None
+                or time.time() < streamer.offline_at + 60
+            ):
+                continue
+            try:
+                live = self.get_broadcast_id(streamer) is not None
+                if live:
+                    logger.info(
+                        f"{streamer.username} is live but Twitch sent no live "
+                        "notification; checking the stream now"
+                    )
+                    self.check_streamer_online(streamer)
+            except StreamerIsOfflineException:
+                pass
+            except Exception as e:
+                logger.debug(f"Live check for {streamer.username} failed: {e}")
+            time.sleep(0.5)
+
     def get_channel_id(self, streamer_username):
         json_data = copy.deepcopy(GQLOperations.GetIDFromLogin)
         json_data["variables"]["login"] = streamer_username
@@ -1491,10 +1520,25 @@ class Twitch(object):
         return campaigns
 
     def claim_drop(self, drop):
-        logger.info(
-            f"Claim {drop}", extra={"emoji": ":package:", "event": Events.DROP_CLAIM}
-        )
+        claimed = self.__request_claim_drop(drop)
+        if claimed and drop.is_badge_or_emote:
+            kind = "Badge" if "BADGE" in drop.benefit_types else "Emote"
+            logger.info(
+                f"{kind} drop claimed: {drop.benefit or drop.name}\n{drop}",
+                extra={
+                    "emoji": ":medal:",
+                    "event": Events.DROP_CLAIM,
+                    "telegram_highlight": True,
+                    "telegram_pin_key": drop.id,
+                },
+            )
+        else:
+            logger.info(
+                f"Claim {drop}", extra={"emoji": ":package:", "event": Events.DROP_CLAIM}
+            )
+        return claimed
 
+    def __request_claim_drop(self, drop):
         json_data = copy.deepcopy(GQLOperations.DropsPage_ClaimDropRewards)
         json_data["variables"] = {"input": {"dropInstanceID": drop.drop_instance_id}}
         response = self.post_gql_request(json_data)
