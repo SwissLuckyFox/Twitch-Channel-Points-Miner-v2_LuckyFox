@@ -1,3 +1,4 @@
+import logging
 import tempfile
 import time
 import unittest
@@ -213,7 +214,7 @@ class ClaimDropMessageTests(unittest.TestCase):
         record = self.claim(True)
         self.assertTrue(record.getMessage().startswith("Badge drop claimed: Alien"))
         self.assertTrue(record.telegram_highlight)
-        self.assertEqual(record.telegram_pin_key, "drop-1")
+        self.assertEqual(record.telegram_pin_key, "badge:alien: isolation horror")
 
     def test_game_item_and_failed_badge_claim_are_plain(self):
         for drop_id, distribution, claimed in (
@@ -232,7 +233,9 @@ class ClaimDropMessageTests(unittest.TestCase):
             self.assertEqual(record.levelname, "DEBUG")
             self.assertTrue(record.skip_telegram)
             self.assertTrue(record.skip_discord)
-        self.assertTrue(self.notified(self.claim(False, drop_id="drop-2")))
+        self.assertTrue(
+            self.notified(self.claim(False, "DIRECT_ENTITLEMENT", "drop-2"))
+        )
 
     def test_success_after_failed_claim_is_announced_once_more(self):
         self.claim(False)
@@ -279,12 +282,36 @@ class DropsConditionTests(unittest.TestCase):
 class InventorySyncTests(unittest.TestCase):
     def setUp(self):
         self.twitch = object.__new__(Twitch)
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        for patcher in (
+            patch.object(Settings, "analytics_path", folder.name, create=True),
+            patch.object(Drop, "__str__", lambda self: self.name),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.announcements = []
 
     def _sync(self, inventory, campaigns, owned_badges=None):
+        logger = twitch_module.logger
         with patch.object(
             Twitch, "_Twitch__get_inventory", return_value=inventory
-        ), patch.object(Twitch, "get_owned_badges", return_value=owned_badges):
+        ), patch.object(
+            Twitch, "get_owned_badges", return_value=owned_badges
+        ), patch.object(
+            logger, "log", side_effect=lambda level, msg, extra: self.announcements.append(
+                (level, msg, extra)
+            )
+        ):
             return self.twitch._Twitch__sync_campaigns(campaigns)
+
+    def assertAnnouncedBadge(self, count=1):
+        self.assertEqual(len(self.announcements), count)
+        for level, message, extra in self.announcements:
+            self.assertEqual(level, logging.INFO)
+            self.assertTrue(message.startswith("Badge drop claimed: Alien"))
+            self.assertTrue(extra["telegram_highlight"])
+            self.assertEqual(extra["telegram_pin_key"], "badge:alien: isolation horror")
 
     def test_completed_campaign_from_game_event_drops_is_cleared(self):
         campaign = Campaign(campaign_data([drop_data()]))
@@ -343,6 +370,52 @@ class InventorySyncTests(unittest.TestCase):
             inventory, [campaign], ({"owned-badge"}, {"alien: isolation horror"})
         )
         self.assertEqual(campaign.drops, [])
+        self.assertAnnouncedBadge()
+
+    def test_auto_awarded_badge_in_inventory_is_announced_once(self):
+        campaign = Campaign(campaign_data([drop_data()]))
+        progress = {
+            "currentMinutesWatched": 30,
+            "hasPreconditionsMet": True,
+            "dropInstanceID": None,
+            "isClaimed": False,
+        }
+        inventory = {
+            "dropCampaignsInProgress": [
+                {"id": campaign.id, "timeBasedDrops": [{"id": "drop-1", "self": progress}]}
+            ]
+        }
+        self._sync(inventory, [campaign], (set(), set()))
+        self.assertEqual(self.announcements, [])
+        progress["isClaimed"] = True
+        self._sync(inventory, [campaign], (set(), set()))
+        self.assertAnnouncedBadge()
+
+        # The same badge offered again (e.g. by another campaign) is not repeated.
+        other = Campaign(campaign_data([drop_data("drop-2")]))
+        self._sync({}, [other], (set(), set()))
+        self._sync({}, [other], ({"owned-badge"}, {"alien: isolation horror"}))
+        self.assertAnnouncedBadge()
+
+    def test_already_owned_badge_at_startup_is_not_announced(self):
+        campaign = Campaign(campaign_data([drop_data()]))
+        self._sync({}, [campaign], ({"owned-badge"}, {"alien: isolation horror"}))
+        self.assertEqual(campaign.drops, [])
+        self.assertEqual(self.announcements, [])
+
+    def test_owned_stream_database_badge_is_announced(self):
+        data = campaign_data([drop_data()])
+        data["id"] = f"{twitch_module.STREAMDB_PREFIX}owned-set:12345"
+        campaign = Campaign(data)
+        self._sync({}, [campaign], (set(), set()))
+        self._sync({}, [campaign], ({"owned-set"}, {"different twitch title"}))
+        self.assertEqual(campaign.drops, [])
+        self.assertAnnouncedBadge()
+
+    def test_badge_filtered_out_by_rebuild_is_still_announced(self):
+        self._sync({}, [Campaign(campaign_data([drop_data()]))], (set(), set()))
+        self._sync({}, [], ({"owned-badge"}, {"alien: isolation horror"}))
+        self.assertAnnouncedBadge()
 
     def test_owned_badge_does_not_remove_game_item_with_same_name(self):
         campaign = Campaign(

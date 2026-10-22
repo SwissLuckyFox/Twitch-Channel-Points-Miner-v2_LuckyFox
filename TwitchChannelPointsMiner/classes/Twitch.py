@@ -249,6 +249,14 @@ def _campaign_from_available_drops(data, channel_entry, linked=True):
     }
 
 
+def _drop_key(drop):
+    # A badge can be offered by several campaigns (Twitch and Stream Database, one per
+    # category), so badges are identified by their title instead of the drop id.
+    if drop.badge_titles:
+        return "badge:" + "|".join(sorted(drop.badge_titles))
+    return drop.id
+
+
 def _campaigns_from_badge(badge):
     """
     Campaign data for a running Stream Database watch badge, one per category, used when
@@ -468,6 +476,7 @@ class Twitch(object):
         "client_version_loaded",
         "twilight_build_id_pattern",
         "announced_drops",
+        "pending_drops",
     ]
 
     def __init__(self, username, user_agent, password=None):
@@ -1497,9 +1506,12 @@ class Twitch(object):
             for event in (inventory.get("gameEventDrops") or [])
             if isinstance(event, dict) and event.get("id")
         }
+        # Drops still unearned after the previous sync: key -> drop.
+        pending = getattr(self, "pending_drops", None) or {}
         owned_badges = (
             self.get_owned_badges()
             if any(drop.badge_titles for campaign in campaigns for drop in campaign.drops)
+            or any(drop.badge_titles for drop in pending.values())
             else None
         )
         owned_sets, owned_titles = (
@@ -1519,9 +1531,40 @@ class Twitch(object):
             if campaign.id.startswith(STREAMDB_PREFIX):
                 set_id = campaign.id[len(STREAMDB_PREFIX) :].rsplit(":", 1)[0]
                 if set_id.strip().lower() in owned_sets:
-                    campaign.drops = []
+                    for drop in campaign.drops:
+                        drop.is_claimed = True
+            for drop in campaign.drops:
+                if drop.is_claimed is True and _drop_key(drop) in pending:
+                    self.__announce_earned(drop)
             campaign.clear_drops()  # Remove all the claimed drops
+
+        # Badges that disappeared from the campaign list because they are owned now
+        # (e.g. the hourly rebuild already filtered them out).
+        current = {
+            _drop_key(drop) for campaign in campaigns for drop in campaign.drops
+        }
+        for key, drop in pending.items():
+            if (
+                key not in current
+                and drop.badge_titles
+                and drop.badge_titles <= owned_titles
+            ):
+                self.__announce_earned(drop)
+
+        self.pending_drops = {
+            _drop_key(drop): drop for campaign in campaigns for drop in campaign.drops
+        }
         return campaigns
+
+    def __announce_earned(self, drop):
+        """Announce a drop Twitch awarded without a claim by the miner (auto-granted badges)."""
+        announced = self.__load_announced_drops()
+        key = _drop_key(drop)
+        if announced.get(key) is True:
+            return
+        self.__log_claim(drop, True, notify=True)
+        announced[key] = True
+        self.__save_announced_drops()
 
     def __announced_drops_file(self):
         folder = getattr(Settings, "analytics_path", None)
@@ -1560,9 +1603,17 @@ class Twitch(object):
     def claim_drop(self, drop):
         claimed = self.__request_claim_drop(drop)
         announced = self.__load_announced_drops()
+        key = _drop_key(drop)
         # Twitch keeps offering unclaimable drops (e.g. no linked game account), so
         # notify once per drop, and once more if a retry finally succeeds.
-        notify = drop.id not in announced or (claimed and not announced[drop.id])
+        notify = key not in announced or (claimed and not announced[key])
+        self.__log_claim(drop, claimed, notify)
+        if notify:
+            announced[key] = claimed is True
+            self.__save_announced_drops()
+        return claimed
+
+    def __log_claim(self, drop, claimed, notify):
         extra = {"event": Events.DROP_CLAIM}
         if not notify:
             extra.update(skip_telegram=True, skip_discord=True)
@@ -1571,7 +1622,9 @@ class Twitch(object):
             kind = "Badge" if "BADGE" in drop.benefit_types else "Emote"
             message = f"{kind} drop claimed: {drop.benefit or drop.name}\n{drop}"
             extra.update(
-                emoji=":medal:", telegram_highlight=True, telegram_pin_key=drop.id
+                emoji=":medal:",
+                telegram_highlight=True,
+                telegram_pin_key=_drop_key(drop),
             )
         elif claimed:
             message = f"Claimed {drop}"
@@ -1581,10 +1634,6 @@ class Twitch(object):
             extra["emoji"] = ":package:"
 
         logger.log(logging.INFO if notify else logging.DEBUG, message, extra=extra)
-        if notify:
-            announced[drop.id] = claimed is True
-            self.__save_announced_drops()
-        return claimed
 
     def __request_claim_drop(self, drop):
         json_data = copy.deepcopy(GQLOperations.DropsPage_ClaimDropRewards)
