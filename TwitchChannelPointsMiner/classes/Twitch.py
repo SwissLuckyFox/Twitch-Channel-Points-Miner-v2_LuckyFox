@@ -1784,10 +1784,10 @@ class Twitch(object):
 
     def __channels_offering_campaign(self, campaign, channels):
         """
-        Keep the directory channels on which Twitch really offers this campaign.
-        "Drops enabled" only means some campaign of the game runs there, and campaigns
-        taken from the inventory carry no channel list. Stream Database campaigns have no
-        Twitch id to compare, and if Twitch does not answer at all the list is kept as is.
+        Prefer channels explicitly listing the campaign. AvailableDrops can omit an
+        inventory campaign even while watching progresses it, so unrestricted inventory
+        campaigns may fall back to the game's drops-enabled directory. Stream Database
+        campaigns have no Twitch id; unanswered requests also keep the directory list.
         """
         if str(campaign.id).startswith(STREAMDB_PREFIX):
             return channels
@@ -1819,6 +1819,16 @@ class Twitch(object):
                 "; ".join(details),
                 extra={"emoji": ":mag:", "event": Events.DROP_SCAN},
             )
+            if campaign.in_inventory and campaign.any_channel:
+                logger.info(
+                    "Drop '%s' (%s): already in your inventory with no channel "
+                    "restrictions listed; using drops-enabled category channels "
+                    "although Twitch's channel API does not list the campaign",
+                    campaign.name,
+                    campaign.game_name(),
+                    extra={"emoji": ":mag:", "event": Events.DROP_SCAN},
+                )
+                return channels
         return matching
 
     def __get_available_drop_campaigns(self, channel_ids):

@@ -573,6 +573,75 @@ class DirectoryDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(channels, [("1", "matching")])
 
+    def test_inventory_campaign_can_use_directory_when_channel_api_omits_it(self):
+        data = campaign_data([drop_data(distribution="IN_GAME")], account_connected=False)
+        data["name"] = "Quadra Paintjobs"
+        campaign = Campaign(data)
+        inventory = {
+            "dropCampaignsInProgress": [{
+                "id": campaign.id,
+                "timeBasedDrops": [{
+                    "id": "drop-1",
+                    "self": {
+                        "hasPreconditionsMet": True,
+                        "currentMinutesWatched": 12,
+                        "dropInstanceID": None,
+                        "isClaimed": False,
+                    },
+                }],
+            }],
+        }
+        streamers, discovered, directory_channels = [], {}, {}
+        with patch.object(
+            Twitch, "_Twitch__get_inventory", return_value=inventory
+        ):
+            self.twitch._Twitch__sync_campaigns([campaign])
+        self.assertTrue(campaign.in_inventory)
+        self.assertEqual(campaign.drops[0].current_minutes_watched, 12)
+
+        for returned in ([{"id": "badge-campaign", "name": "Chat Badge"}], []):
+            with self.subTest(returned=returned), patch.object(
+                Twitch, "get_drops_enabled_channels", return_value=[("1", "a")]
+            ), patch.object(
+                Twitch, "_Twitch__get_available_drop_campaigns",
+                return_value={"1": returned},
+            ), self.assertLogs(twitch_module.logger, level="INFO") as logs:
+                self.twitch._Twitch__discover_directory_channels(
+                    campaign, streamers, discovered, directory_channels
+                )
+
+            self.assertEqual(directory_channels[campaign.id], {"1"})
+            self.assertEqual([s.username for s in streamers], ["a"])
+            self.assertIn("using drops-enabled category channels", "\n".join(logs.output))
+            self.assertNotIn("trying again in 10 minutes", "\n".join(logs.output))
+
+    def test_inventory_campaign_prefers_explicit_campaign_matches(self):
+        campaign = Campaign(campaign_data([drop_data()]))
+        campaign.in_inventory = True
+        with patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns",
+            return_value={"1": [{"id": "badge-campaign"}], "2": [{"id": campaign.id}]},
+        ):
+            result = self.twitch._Twitch__channels_offering_campaign(
+                campaign, [("1", "other"), ("2", "matching")]
+            )
+        self.assertEqual(result, [("2", "matching")])
+
+    def test_restricted_inventory_campaign_does_not_bypass_campaign_matching(self):
+        campaign = Campaign(campaign_data([drop_data()], channels=[{"id": "1"}]))
+        campaign.in_inventory = True
+        directory_channels = {}
+        with patch.object(
+            Twitch, "get_drops_enabled_channels", return_value=[("1", "a"), ("2", "b")]
+        ), patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns",
+            return_value={"1": [{"id": "badge-campaign"}]},
+        ):
+            self.twitch._Twitch__discover_directory_channels(
+                campaign, [], {}, directory_channels
+            )
+        self.assertEqual(directory_channels, {})
+
     def test_rejected_directory_scan_reports_actual_campaign_responses(self):
         campaign = Campaign(campaign_data([drop_data()]))
         offered = {
