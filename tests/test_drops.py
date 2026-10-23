@@ -556,6 +556,59 @@ class DirectoryDiscoveryTests(unittest.TestCase):
         self.assertEqual(directory_channels["campaign-1"], {"2"})
         self.assertEqual([s.username for s in streamers], ["b"])
 
+    def test_campaign_matching_uses_id_not_campaign_or_reward_name(self):
+        data = campaign_data([drop_data()])
+        data["name"] = "Quadra Paintjobs"
+        campaign = Campaign(data)
+        offered = {
+            "1": [{"id": campaign.id, "name": "Short-Fuse Neon"}],
+            "2": [{"id": "other-campaign", "name": campaign.name}],
+        }
+        with patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns", return_value=offered
+        ):
+            channels = self.twitch._Twitch__channels_offering_campaign(
+                campaign, [("1", "matching"), ("2", "different")]
+            )
+
+        self.assertEqual(channels, [("1", "matching")])
+
+    def test_rejected_directory_scan_reports_actual_campaign_responses(self):
+        campaign = Campaign(campaign_data([drop_data()]))
+        offered = {
+            "1": [{"id": "other-campaign", "name": "Other paintjobs"}],
+            "2": [],
+        }
+        with patch.object(
+            Twitch,
+            "get_drops_enabled_channels",
+            return_value=[("1", "other"), ("2", "empty"), ("3", "missing")],
+        ), patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns", return_value=offered
+        ), self.assertLogs(twitch_module.logger, level="INFO") as logs:
+            self.twitch._Twitch__discover_directory_channels(campaign, [], {}, {})
+
+        messages = "\n".join(logs.output)
+        self.assertIn("expected campaign-1", messages)
+        self.assertIn("other (1): Other paintjobs [other-campaign]", messages)
+        self.assertIn("empty (2): no campaigns returned", messages)
+        self.assertIn("missing (3): response unavailable", messages)
+        self.assertIn("none of the 3 checked drops-enabled channels", messages)
+        self.assertNotIn("run other campaigns", messages)
+
+    def test_empty_campaign_responses_are_not_reported_as_other_campaigns(self):
+        campaign = Campaign(campaign_data([drop_data()]))
+        with patch.object(
+            Twitch, "get_drops_enabled_channels", return_value=[("1", "empty")]
+        ), patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns", return_value={"1": []}
+        ), self.assertLogs(twitch_module.logger, level="INFO") as logs:
+            self.twitch._Twitch__discover_directory_channels(campaign, [], {}, {})
+
+        messages = "\n".join(logs.output)
+        self.assertIn("empty (1): no campaigns returned", messages)
+        self.assertNotIn("run other campaigns", messages)
+
     def test_allow_list_campaign_only_uses_live_allowed_channels(self):
         campaign = Campaign(
             campaign_data([drop_data()], channels=[{"id": "2"}, {"id": "99"}])

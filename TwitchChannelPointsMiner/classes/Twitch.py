@@ -1748,11 +1748,13 @@ class Twitch(object):
                 f"No live drops-enabled channel found for campaign {campaign.name}"
             )
             return
+        checked_count = len(found)
         found = self.__channels_offering_campaign(campaign, found)
         if not found:
             logger.info(
-                f"Drop '{campaign.name}' ({campaign.game_name()}): live channels in the "
-                "category run other campaigns, trying again in 10 minutes",
+                f"Drop '{campaign.name}' ({campaign.game_name()}): none of the "
+                f"{checked_count} checked drops-enabled channels lists this campaign, "
+                "trying again in 10 minutes",
                 extra={"emoji": ":mag:", "event": Events.DROP_SCAN},
             )
             return
@@ -1792,11 +1794,32 @@ class Twitch(object):
         offered = self.__get_available_drop_campaigns([cid for cid, _ in channels])
         if not offered:
             return channels
-        return [
+        matching = [
             (channel_id, login)
             for channel_id, login in channels
             if any(c.get("id") == campaign.id for c in offered.get(channel_id, ()))
         ]
+        if not matching:
+            details = []
+            for channel_id, login in channels:
+                if channel_id not in offered:
+                    status = "response unavailable"
+                elif not offered[channel_id]:
+                    status = "no campaigns returned"
+                else:
+                    status = ", ".join(
+                        f"{entry.get('name') or '(unnamed)'} [{entry.get('id') or '(no id)'}]"
+                        for entry in offered[channel_id]
+                    )
+                details.append(f"{login} ({channel_id}): {status}")
+            logger.info(
+                "Drop campaign check for '%s' (expected %s): %s",
+                campaign.name,
+                campaign.id,
+                "; ".join(details),
+                extra={"emoji": ":mag:", "event": Events.DROP_SCAN},
+            )
+        return matching
 
     def __get_available_drop_campaigns(self, channel_ids):
         """channel id -> campaigns Twitch offers on that live channel (AvailableDrops)."""
