@@ -1,5 +1,7 @@
 FROM python:3.11-slim-bookworm
 
+ENV PYTHONFAULTHANDLER=1
+
 WORKDIR /usr/src/app
 
 COPY ./requirements.txt ./
