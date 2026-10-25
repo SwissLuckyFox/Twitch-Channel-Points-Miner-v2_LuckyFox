@@ -154,6 +154,41 @@ class GQLOperations:
             }
         },
     }
+    DropChannelCampaignsProgress = {
+        "operationName": "DropChannelCampaignsProgress",
+        "extensions": {"persistedQuery": {
+            "version": 1,
+            "sha256Hash": "3d9ce923899cbab5d7a8481da4e9918b1982a987bac68ac4347b5cf925a1d523",
+        }},
+    }
+    DropsChannelCategory = {
+        "operationName": "DropsChannelCategory",
+        "extensions": {"persistedQuery": {
+            "version": 1,
+            "sha256Hash": "98d1fd23e3dc6e72d661e5762316c45d39726aeb1c9dd66755fe2f6503615b36",
+        }},
+    }
+    WithIsStreamLiveQuery = {
+        "operationName": "WithIsStreamLiveQuery",
+        "extensions": {"persistedQuery": {
+            "version": 1,
+            "sha256Hash": "04e46329a6786ff3a81c01c50bfa5d725902507a0deb83b0edbf7abe7a3716ea",
+        }},
+    }
+    ProgressionTrackSelections = {
+        "operationName": "ProgressionTrackSelections",
+        "extensions": {"persistedQuery": {
+            "version": 1,
+            "sha256Hash": "922b80c42ea781ec921143107d8994e32f0011e5792bfe28a7bc9fda09dfb31d",
+        }},
+    }
+    SetProgressionTrackSelection = {
+        "operationName": "SetProgressionTrackSelection",
+        "extensions": {"persistedQuery": {
+            "version": 1,
+            "sha256Hash": "adb060ddf31d31f41108a91965d0b79316b536645f9b3df337240d6d8bcef4ac",
+        }},
+    }
     GetIDFromLogin = {
         "operationName": "GetIDFromLogin",
         "variables": {"login": None},

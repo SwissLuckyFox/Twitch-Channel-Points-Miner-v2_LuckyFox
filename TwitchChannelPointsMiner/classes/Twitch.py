@@ -36,6 +36,10 @@ from TwitchChannelPointsMiner.classes.Settings import (
 )
 from TwitchChannelPointsMiner.classes.TwitchLogin import TwitchLogin
 from TwitchChannelPointsMiner.classes.StreamDatabase import fetch_watch_badges
+from TwitchChannelPointsMiner.classes.ProgressionDrops import (
+    PROGRESSION_PREFIX,
+    ProgressionDrops,
+)
 from TwitchChannelPointsMiner.constants import (
     CLIENT_ID,
     CLIENT_VERSION,
@@ -2029,6 +2033,10 @@ class Twitch(object):
         directory_checked = {}
         # Stream Database fallback campaign id -> time it was first offered
         badge_first_offered = {}
+        rotate = os.getenv("POKEMON_AUTO_ROTATE", "").strip().lower()
+        if rotate not in ("", "0", "false", "no", "1", "true", "yes"):
+            logger.warning("Invalid POKEMON_AUTO_ROTATE value; Pokemon rotation disabled")
+        progression = ProgressionDrops(self) if rotate in ("1", "true", "yes") else None
         while self.running:
             scan_stats = None
             try:
@@ -2128,12 +2136,24 @@ class Twitch(object):
                 # Divide et impera :)
                 campaigns = self.__sync_campaigns(campaigns)
                 active_campaigns = [c for c in campaigns if c.drops]
+                if progression is not None:
+                    daily_campaigns = progression.sync(streamers)
+                    # Legacy inventory/Stream Database guesses must not keep the
+                    # same Pokemon reward active while its daily stage is paused.
+                    active_campaigns = [
+                        c for c in active_campaigns if not progression.manages(c)
+                    ]
+                    for campaign, (channel_id, login) in daily_campaigns:
+                        active_campaigns.append(campaign)
+                        directory_channels[campaign.id] = {channel_id}
+                        if not any(s.channel_id == channel_id for s in streamers):
+                            self.__add_drop_streamer(
+                                streamers, discovered_streamers, channel_id, login
+                            )
                 active_ids = {c.id for c in active_campaigns}
 
                 if scan_stats is not None:
-                    scan_stats["already_earned"] = len(campaigns) - len(
-                        active_campaigns
-                    )
+                    scan_stats["already_earned"] = sum(not c.drops for c in campaigns)
                     logger.info(
                         describe_drop_scan(active_campaigns, scan_stats),
                         extra={"emoji": ":mag:", "event": Events.DROP_SCAN},
@@ -2225,7 +2245,8 @@ class Twitch(object):
                         )
                 for campaign in active_campaigns:
                     if (
-                        campaign.id in covered_ids
+                        campaign.id.startswith(PROGRESSION_PREFIX)
+                        or campaign.id in covered_ids
                         or time.time() - directory_checked.get(campaign.id, 0)
                         < DIRECTORY_SEARCH_INTERVAL
                     ):
