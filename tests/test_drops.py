@@ -70,6 +70,31 @@ def campaign_data(drops, channels=None, account_connected=True):
 
 
 class DropFilterTests(unittest.TestCase):
+    def test_progress_bar_has_one_block_per_five_percent(self):
+        drop = Drop(drop_data(minutes=120))
+        for percent in range(101):
+            with self.subTest(percent=percent):
+                drop.percentage_progress = percent
+                bar = drop.progress_bar().split("|")[1]
+                self.assertEqual(len(bar), 20)
+                self.assertEqual(bar.count("\u2588"), percent // 5)
+                self.assertEqual(bar.count(" "), 20 - percent // 5)
+
+    def test_progress_bar_uses_percentage_not_watched_minutes(self):
+        for minutes, watched in ((120, 108), (30, 27)):
+            with self.subTest(minutes=minutes):
+                drop = Drop(drop_data(minutes=minutes))
+                drop.update({
+                    "hasPreconditionsMet": True,
+                    "currentMinutesWatched": watched,
+                    "dropInstanceID": None,
+                    "isClaimed": False,
+                })
+                self.assertEqual(
+                    drop.progress_bar(),
+                    "|" + "\u2588" * 18 + f"  | 90% [{watched}/{minutes}]",
+                )
+
     def test_progress_is_reported_every_ten_percent(self):
         drop = Drop(drop_data(minutes=30))
         reported = []

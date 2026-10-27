@@ -168,11 +168,9 @@ class Drop(object):
         )
 
     def progress_bar(self):
-        progress = self.percentage_progress // 2
-        remaining = (100 - self.percentage_progress) // 2
-        if remaining + progress < 50:
-            remaining += 50 - (remaining + progress)
-        return f"|{('█' * progress)}{(' ' * remaining)}|\t{self.percentage_progress}% [{self.current_minutes_watched}/{self.minutes_required}]"
+        progress = self.percentage_progress // 5
+        remaining = 20 - progress
+        return f"|{('█' * progress)}{(' ' * remaining)}| {self.percentage_progress}% [{self.current_minutes_watched}/{self.minutes_required}]"
 
     def __eq__(self, other):
         if isinstance(other, self.__class__):
