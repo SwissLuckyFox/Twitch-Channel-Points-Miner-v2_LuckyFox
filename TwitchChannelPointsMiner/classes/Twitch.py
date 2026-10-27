@@ -2050,6 +2050,9 @@ class Twitch(object):
                     # (AvailableDrops on their channels/categories) confirms the campaigns;
                     # the inventory adds campaigns that were already started.
                     badges, streamdb_error = self.__get_stream_database_badges()
+                    known_badge_titles = {
+                        badge.title.strip().lower() for badge in badges
+                    }
                     dashboard = self.__get_drops_dashboard(status="ACTIVE")
                     campaigns_details = (
                         self.__get_campaigns_details(dashboard) if dashboard else []
@@ -2111,7 +2114,7 @@ class Twitch(object):
                     # Going to clear array and structure. Remove all the timeBasedDrops expired or not started yet
                     for data in campaigns_data:
                         try:
-                            campaign = Campaign(data)
+                            campaign = Campaign(data, known_badge_titles)
                         except (KeyError, TypeError, ValueError) as error:
                             logger.debug(f"Skipping unreadable drop campaign: {error!r}")
                             scan_stats["no_watch_drops"] += 1

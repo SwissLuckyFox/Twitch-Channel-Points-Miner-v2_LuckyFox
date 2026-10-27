@@ -19,7 +19,7 @@ class Campaign(object):
         "account_connected",
     ]
 
-    def __init__(self, dict):
+    def __init__(self, dict, known_badge_titles=()):
         self.id = dict["id"]
         self.game = dict["game"]
         self.name = dict["name"]
@@ -43,7 +43,10 @@ class Campaign(object):
 
         self.drops = [
             drop
-            for drop in map(lambda x: Drop(x), dict.get("timeBasedDrops") or [])
+            for drop in (
+                Drop(data, known_badge_titles)
+                for data in dict.get("timeBasedDrops") or []
+            )
             if drop.is_watchable
         ]
 

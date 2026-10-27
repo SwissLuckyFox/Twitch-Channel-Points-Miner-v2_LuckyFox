@@ -1,9 +1,10 @@
 import logging
+import os
 import tempfile
 import time
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import TwitchChannelPointsMiner.classes.Twitch as twitch_module
 from TwitchChannelPointsMiner.classes.entities.Campaign import Campaign
@@ -13,8 +14,11 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import (
     StreamerSettings,
 )
 from TwitchChannelPointsMiner.classes.Settings import Settings
+from TwitchChannelPointsMiner.classes.StreamDatabase import WatchBadge
+from TwitchChannelPointsMiner.classes.Telegram import Telegram
 from TwitchChannelPointsMiner.classes.Twitch import Twitch
 from TwitchChannelPointsMiner.constants import GQLOperations
+from TwitchChannelPointsMiner.logger import GlobalFormatter, LoggerSettings
 
 FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -129,6 +133,38 @@ class DropFilterTests(unittest.TestCase):
         )
         self.assertFalse(campaign.is_eligible)
 
+    def test_known_badge_title_only_fills_missing_reward_types(self):
+        for distribution in (None, "", "BADGE", "EMOTE", "DIRECT_ENTITLEMENT"):
+            with self.subTest(distribution=distribution):
+                data = drop_data(distribution=distribution)
+                data["benefitEdges"][0]["benefit"]["name"] = " Hunt White "
+                drop = Drop(data, known_badge_titles={"hunt white"})
+                expected = distribution or "BADGE"
+                self.assertEqual(drop.benefit_types, [expected])
+                self.assertEqual(
+                    drop.badge_titles, {"hunt white"} if expected == "BADGE" else set()
+                )
+                self.assertEqual(
+                    data["benefitEdges"][0]["benefit"]["distributionType"],
+                    distribution,
+                )
+
+    def test_unknown_reward_title_does_not_become_a_badge(self):
+        drop = Drop(
+            drop_data(distribution=None), known_badge_titles={"hunt white"}
+        )
+        self.assertFalse(drop.is_badge_or_emote)
+        self.assertEqual(drop.badge_titles, set())
+
+    def test_known_badge_with_untyped_second_reward_needs_both_rewards(self):
+        data = drop_data(distribution=None)
+        data["benefitEdges"].append(
+            {"benefit": {"id": "other", "name": "Unknown reward"}}
+        )
+        drop = Drop(data, known_badge_titles={"alien: isolation horror"})
+        self.assertTrue(drop.is_badge_or_emote)
+        self.assertEqual(drop.badge_titles, set())
+
 
 class ClaimedBenefitTests(unittest.TestCase):
     def test_reward_awarded_during_campaign_marks_drop_claimed(self):
@@ -215,6 +251,97 @@ class ClaimDropMessageTests(unittest.TestCase):
         self.assertTrue(record.getMessage().startswith("Badge drop claimed: Alien"))
         self.assertTrue(record.telegram_highlight)
         self.assertEqual(record.telegram_pin_key, "badge:alien: isolation horror")
+
+    def test_badge_without_twitch_reward_type_is_highlighted_and_pinned(self):
+        data = drop_data(minutes=15)
+        data["name"] = "Hunt White"
+        benefit = data["benefitEdges"][0]["benefit"]
+        benefit["name"] = "Hunt White"
+        del benefit["distributionType"]
+        campaign = Campaign(
+            campaign_data([data]), known_badge_titles={"hunt white"}
+        )
+        drop = campaign.drops[0]
+        drop.current_minutes_watched = 14
+        drop.percentage_progress = 93
+        with patch.object(
+            Twitch, "_Twitch__request_claim_drop", return_value=True
+        ), patch.object(Drop, "__str__", lambda self: self.name), self.assertLogs(
+            "TwitchChannelPointsMiner.classes.Twitch", "INFO"
+        ) as logs:
+            self.assertTrue(self.twitch.claim_drop(drop))
+        record = logs.records[-1]
+        self.assertEqual(record.getMessage(), "Badge drop claimed: Hunt White\nHunt White")
+        self.assertTrue(record.telegram_highlight)
+        self.assertEqual(record.telegram_pin_key, "badge:hunt white")
+        self.assertEqual(drop.badge_titles, {"hunt white"})
+
+    @patch("TwitchChannelPointsMiner.classes.Telegram.MIN_SEND_INTERVAL", 0)
+    @patch("TwitchChannelPointsMiner.classes.Telegram.requests.post")
+    def test_inventory_scan_sends_and_pins_badge_with_missing_type(self, post):
+        data = drop_data(minutes=15, distribution=None)
+        data["name"] = data["benefitEdges"][0]["benefit"]["name"] = "Hunt White"
+        data["self"] = {
+            "hasPreconditionsMet": True,
+            "currentMinutesWatched": 14,
+            "dropInstanceID": "instance",
+            "isClaimed": False,
+        }
+        inventory = {"dropCampaignsInProgress": [campaign_data([data])]}
+        badge = WatchBadge(
+            "hunt-white", "Hunt White", 15, [], [],
+            datetime.now() - timedelta(days=1), datetime.now() + timedelta(days=1),
+        )
+        self.twitch.running = True
+        telegram = Telegram(123, "test-token", events=["DROP_CLAIM"])
+        formatter = GlobalFormatter(
+            fmt="%(message)s",
+            settings=LoggerSettings(telegram=telegram, emoji=False),
+        )
+        post.return_value = Mock(
+            status_code=200,
+            json=Mock(return_value={"ok": True, "result": {"message_id": 42}}),
+        )
+
+        def stop(*args, **kwargs):
+            self.twitch.running = False
+
+        with patch.dict(os.environ, {"POKEMON_AUTO_ROTATE": "false"}), patch.object(
+            Twitch, "_Twitch__get_stream_database_badges", return_value=([badge], None)
+        ), patch.object(
+            Twitch, "_Twitch__get_drops_dashboard", return_value=[]
+        ), patch.object(
+            Twitch, "_Twitch__get_inventory", return_value=inventory
+        ), patch.object(
+            Twitch, "get_owned_badges", return_value=(set(), set())
+        ), patch.object(
+            Twitch, "_Twitch__discover_campaigns", return_value=([], 0, [])
+        ), patch.object(
+            Twitch, "_Twitch__badge_fallback_campaigns", return_value=[]
+        ), patch.object(
+            Twitch, "_Twitch__request_claim_drop", return_value=True
+        ), patch.object(
+            Twitch, "_Twitch__chuncked_sleep", side_effect=stop
+        ), patch.object(Settings, "logger", LoggerSettings(less=True)), self.assertLogs(
+            "TwitchChannelPointsMiner.classes.Twitch", "INFO"
+        ) as logs:
+            self.twitch.sync_campaigns([])
+        claims = [
+            record for record in logs.records
+            if getattr(record, "telegram_pin_key", None) == "badge:hunt white"
+        ]
+        self.assertEqual(len(claims), 1)
+        formatter.format(claims[0])
+        telegram.flush()
+        self.assertEqual(post.call_count, 2)
+        send, pin = post.call_args_list
+        self.assertTrue(send.kwargs["url"].endswith("/sendMessage"))
+        self.assertEqual(send.kwargs["data"]["parse_mode"], "HTML")
+        self.assertTrue(
+            send.kwargs["data"]["text"].startswith("<b>Badge drop claimed: Hunt White</b>")
+        )
+        self.assertTrue(pin.kwargs["url"].endswith("/pinChatMessage"))
+        self.assertEqual(pin.kwargs["data"]["message_id"], 42)
 
     def test_game_item_and_failed_badge_claim_are_plain(self):
         for drop_id, distribution, claimed in (

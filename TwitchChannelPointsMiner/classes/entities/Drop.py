@@ -41,7 +41,7 @@ class Drop(object):
         "is_printable",
     ]
 
-    def __init__(self, data):
+    def __init__(self, data, known_badge_titles=()):
         self.id = data["id"]
         self.name = data["name"]
         benefits = [
@@ -53,16 +53,23 @@ class Drop(object):
             list(set([benefit.get("name", "") for benefit in benefits]))
         )
         self.benefit_ids = [b["id"] for b in benefits if b.get("id")]
-        self.benefit_types = [
-            b["distributionType"] for b in benefits if b.get("distributionType")
+        # Inventory/channel queries can omit reward types. Only infer badges from
+        # known titles; never replace an explicit Twitch reward type.
+        benefit_types = [
+            benefit.get("distributionType")
+            or (
+                "BADGE"
+                if (benefit.get("name") or "").strip().lower() in known_badge_titles
+                else None
+            )
+            for benefit in benefits
         ]
+        self.benefit_types = [kind for kind in benefit_types if kind]
         self.badge_titles = (
             {benefit["name"].strip().lower() for benefit in benefits}
             if benefits
-            and all(
-                benefit.get("distributionType") == "BADGE" and benefit.get("name")
-                for benefit in benefits
-            )
+            and all(kind == "BADGE" for kind in benefit_types)
+            and all(benefit.get("name") for benefit in benefits)
             else set()
         )
         self.minutes_required = data.get("requiredMinutesWatched") or 0
