@@ -58,15 +58,13 @@ logger = logging.getLogger(__name__)
 
 # Game-directory lookup for drop campaigns that accept any participating channel.
 DIRECTORY_SEARCH_INTERVAL = 10 * 60
-DIRECTORY_SEARCH_LIMIT = 10
-DIRECTORY_CHANNELS_PER_CAMPAIGN = 3
+DIRECTORY_SEARCH_LIMIT = 1
 # Campaigns with a channel allow-list: how many live category streams to scan for
 # allow-listed channels (instead of polling every allow-listed channel).
 ALLOW_LIST_SEARCH_LIMIT = 30
 # Stream Database badges Twitch never confirms (no progress in the inventory) are
 # given up after this long, so the miner doesn't watch a category forever.
 STREAMDB_FALLBACK_SECONDS = 12 * 60 * 60
-STREAMDB_CHANNELS_PER_BADGE = 10
 STREAMDB_PREFIX = "streamdb:"
 # Video loading for drop progress (TwitchDropsMiner loads every ~20 seconds).
 STREAM_WATCH_INTERVAL = 20
@@ -1106,10 +1104,13 @@ class Twitch(object):
                         # single slot is enough; the other one keeps the normal routine.
                         drop_indices = sorted(
                             streamers_index,
-                            key=lambda index: not any(
-                                not drop.is_claimed and "BADGE" in drop.benefit_types
-                                for campaign in streamers[index].stream.campaigns
-                                for drop in campaign.drops
+                            key=lambda index: (
+                                streamers[index].drops_only,
+                                not any(
+                                    not drop.is_claimed and "BADGE" in drop.benefit_types
+                                    for campaign in streamers[index].stream.campaigns
+                                    for drop in campaign.drops
+                                ),
                             ),
                         )
                         for index in drop_indices:
@@ -1768,8 +1769,14 @@ class Twitch(object):
                 f"No live drops-enabled channel found for campaign {campaign.name}"
             )
             return
-        checked_count = len(found)
-        found = self.__channels_offering_campaign(campaign, found)
+        checked_count = 0
+        matching = []
+        for channel in found:
+            checked_count += 1
+            matching = self.__channels_offering_campaign(campaign, [channel])
+            if matching:
+                break
+        found = matching
         if not found:
             logger.info(
                 f"Drop '{campaign.name}' ({campaign.game_name()}): none of the "
@@ -1780,14 +1787,7 @@ class Twitch(object):
             return
 
         known = {streamer.channel_id: streamer for streamer in streamers}
-        selected = []
-        for channel_id, login in found:
-            # Prefer channels the user already follows/mines, then fill up with new ones.
-            if channel_id in known and channel_id not in discovered_streamers:
-                selected.insert(0, (channel_id, login))
-            else:
-                selected.append((channel_id, login))
-        selected = selected[:DIRECTORY_CHANNELS_PER_CAMPAIGN]
+        selected = found[:1]
 
         directory_channels[campaign.id] = {channel_id for channel_id, _ in selected}
         for channel_id, login in selected:
@@ -1964,20 +1964,9 @@ class Twitch(object):
         return result
 
     def __discover_campaigns(self, streamers, known_campaigns, badges=(), drop_games=()):
-        """
-        Twitch no longer gives app clients the campaign list (ViewerDropsDashboard and
-        DropCampaignDetails return null since ~Sep 2026), but the per-channel AvailableDrops
-        query still works. Probe channels for campaigns that are not known yet:
-        the channels/categories of Stream Database watch badges first, then the user's live
-        channels and live drops-enabled channels of the relevant categories (games of known
-        campaigns, the user's live streams with drops enabled, and twitchdrops.app hints).
-        Returns (campaign data list, number of probed channels, category names).
-        """
-        channels = {}
+        """Check followed/configured channels first, then stop at one usable external channel."""
         games = {}
-        # Channels named by a badge or followed by the user are always kept in a campaign's
-        # allow-list; directory channels are capped.
-        preferred_channels = set()
+        badge_channels = {}
         for badge in badges:
             for game in badge.games:
                 games.setdefault(
@@ -1985,13 +1974,13 @@ class Twitch(object):
                     {"id": game["id"], "name": game["name"], "displayName": game["name"],
                      "slug": game.get("slug")},
                 )
-            for channel_id, login in badge.channels[:STREAMDB_CHANNELS_PER_BADGE]:
-                channels.setdefault(channel_id, login)
-                preferred_channels.add(channel_id)
+            for channel_id, login in badge.channels:
+                badge_channels.setdefault(channel_id, login)
         for data in known_campaigns:
             game = data.get("game")
             if isinstance(game, dict) and game.get("id"):
                 games.setdefault(str(game["id"]), game)
+        preferred = {}
         for streamer in streamers:
             if (
                 streamer.is_online is True
@@ -2000,8 +1989,8 @@ class Twitch(object):
                 and streamer.channel_id
             ):
                 channel_id = str(streamer.channel_id)
-                channels[channel_id] = streamer.username
-                preferred_channels.add(channel_id)
+                if not streamer.drops_only:
+                    preferred[channel_id] = streamer
                 game = streamer.stream.game
                 if streamer.stream.drops_tags and isinstance(game, dict) and game.get("id"):
                     games.setdefault(str(game["id"]), game)
@@ -2014,13 +2003,7 @@ class Twitch(object):
             )
             if slug:
                 search_games.setdefault(slug, game)
-        for game in search_games.values():
-            if not self.running:
-                break
-            for channel_id, login in self.get_drops_enabled_channels(game):
-                channels.setdefault(channel_id, login)
-
-        known_ids = {data.get("id") for data in known_campaigns}
+        known = {data.get("id"): data for data in known_campaigns}
         linked_by_game = {
             str(data["game"]["id"]): (data.get("self") or {}).get("isAccountConnected")
             is not False
@@ -2028,37 +2011,86 @@ class Twitch(object):
             if isinstance(data.get("game"), dict) and data["game"].get("id")
         }
         discovered = {}
-        for channel_id, offered in self.__get_available_drop_campaigns(channels).items():
-            entry = {"id": channel_id, "name": channels[channel_id]}
-            for data in offered:
-                campaign_id = data.get("id")
-                if not campaign_id or campaign_id in known_ids:
-                    continue
-                if campaign_id in discovered:
-                    allowed = discovered[campaign_id]["allow"]["channels"]
-                    extra = [c for c in allowed if c["id"] not in preferred_channels]
-                    if (
-                        channel_id in preferred_channels
-                        or len(extra) < DIRECTORY_CHANNELS_PER_CAMPAIGN
-                    ):
-                        allowed.append(entry)
-                    continue
-                game = data.get("game")
-                game_id = str(game.get("id")) if isinstance(game, dict) else None
-                campaign = _campaign_from_available_drops(
-                    data, entry, linked_by_game.get(game_id, True)
-                )
-                if campaign is not None:
-                    discovered[campaign_id] = campaign
+        checked = set()
+        categories = []
+        badge_titles = {badge.title.strip().lower() for badge in badges}
 
-        categories = sorted(
-            {
-                game.get("displayName") or game.get("name")
-                for game in search_games.values()
-                if game.get("displayName") or game.get("name")
-            }
-        )
-        return list(discovered.values()), len(channels), categories
+        def probe(channels):
+            channels = {cid: login for cid, login in channels.items() if cid not in checked}
+            if not channels:
+                return False
+            checked.update(channels)
+            usable = False
+            for channel_id, offered in self.__get_available_drop_campaigns(channels).items():
+                if channel_id in preferred:
+                    stream = preferred[channel_id].stream
+                    stream.campaigns_ids = list(
+                        dict.fromkeys(
+                            [cid for cid in stream.campaigns_ids if cid in known]
+                            + [entry["id"] for entry in offered if entry.get("id")]
+                        )
+                    )
+                for data in offered:
+                    campaign_id = data.get("id")
+                    if not campaign_id:
+                        continue
+                    game = data.get("game")
+                    game_id = str(game.get("id")) if isinstance(game, dict) else None
+                    campaign = _campaign_from_available_drops(
+                        data,
+                        {"id": channel_id, "name": channels[channel_id]},
+                        linked_by_game.get(game_id, True),
+                    )
+                    if campaign is None:
+                        continue
+                    try:
+                        candidate = Campaign(known.get(campaign_id, campaign), badge_titles)
+                    except (KeyError, TypeError, ValueError) as error:
+                        logger.debug("Skipping unreadable drop campaign: %r", error)
+                        continue
+                    for progress in (known.get(campaign_id, {}).get("timeBasedDrops") or []):
+                        if isinstance(progress.get("self"), dict):
+                            for drop in candidate.drops:
+                                if drop.id == progress.get("id"):
+                                    drop.update(progress["self"])
+                    candidate.clear_drops()
+                    if (
+                        not candidate.dt_match
+                        or not candidate.drops
+                        or (Settings.require_linked_account and not candidate.is_eligible)
+                    ):
+                        continue
+                    usable = True
+                    if campaign_id in known:
+                        continue
+                    if campaign_id in discovered:
+                        discovered[campaign_id]["allow"]["channels"].append(
+                            {"id": channel_id, "name": channels[channel_id]}
+                        )
+                    else:
+                        discovered[campaign_id] = campaign
+            return usable
+
+        if probe({cid: streamer.username for cid, streamer in preferred.items()}) or any(
+            streamer.drops_condition() for streamer in preferred.values()
+        ):
+            return list(discovered.values()), len(checked), categories
+        # Keep a still-live external target rather than discovering replacements.
+        if any(s.drops_only and s.drops_condition() for s in streamers):
+            return list(discovered.values()), len(checked), categories
+        for channel_id, login in badge_channels.items():
+            if not self.running:
+                break
+            if probe({channel_id: login}):
+                return list(discovered.values()), len(checked), categories
+        for game in search_games.values():
+            if not self.running:
+                break
+            categories.append(game.get("displayName") or game.get("name"))
+            found = self.get_drops_enabled_channels(game)
+            if found and probe(dict(found[:1])):
+                break
+        return list(discovered.values()), len(checked), sorted(filter(None, categories))
 
     def sync_campaigns(self, streamers, chunk_size=3):
         campaigns_update = 0
@@ -2069,6 +2101,7 @@ class Twitch(object):
         directory_checked = {}
         # Stream Database fallback campaign id -> time it was first offered
         badge_first_offered = {}
+        had_drop_target = False
         rotate = os.getenv("POKEMON_AUTO_ROTATE", "").strip().lower()
         if rotate not in ("", "0", "false", "no", "1", "true", "yes"):
             logger.warning("Invalid POKEMON_AUTO_ROTATE value; Pokemon rotation disabled")
@@ -2254,6 +2287,17 @@ class Twitch(object):
                             campaign.id for campaign in eligible_campaigns
                         ]
 
+                for channel_id, streamer in discovered_streamers.items():
+                    if channel_id not in needed_channels or streamer.drops_condition():
+                        continue
+                    for campaign_id in list(directory_channels):
+                        directory_channels[campaign_id].discard(channel_id)
+                        if not directory_channels[campaign_id]:
+                            del directory_channels[campaign_id]
+                    streamer.stream.campaigns = []
+                    if streamer.is_online:
+                        streamer.set_offline()
+
                 # If none of the known channels can progress a campaign, look for live
                 # drops-enabled channels in the game directory (for allow-list campaigns
                 # only channels on the allow-list are kept).
@@ -2263,6 +2307,38 @@ class Twitch(object):
                     if streamer.is_online is True
                     for campaign in streamer.stream.campaigns
                 }
+                followed_has_drop = any(
+                    not streamer.drops_only and streamer.drops_condition()
+                    for streamer in streamers
+                )
+                badge_available = any(
+                    "BADGE" in drop.benefit_types
+                    and time.time() - directory_checked.get(campaign.id, 0)
+                    >= DIRECTORY_SEARCH_INTERVAL
+                    for campaign in active_campaigns
+                    for drop in campaign.drops
+                )
+                external_has_badge = any(
+                    streamer.drops_condition()
+                    and any(
+                        "BADGE" in drop.benefit_types
+                        for campaign in streamer.stream.campaigns
+                        for drop in campaign.drops
+                    )
+                    for streamer in discovered_streamers.values()
+                )
+                if followed_has_drop or (badge_available and not external_has_badge):
+                    directory_channels.clear()
+                    for streamer in discovered_streamers.values():
+                        streamer.stream.campaigns = []
+                        if streamer.is_online:
+                            streamer.set_offline()
+                    covered_ids = {
+                        campaign.id
+                        for streamer in streamers
+                        if not streamer.drops_only and streamer.drops_condition()
+                        for campaign in streamer.stream.campaigns
+                    }
                 if report_live:
                     for campaign in active_campaigns:
                         live = [
@@ -2284,7 +2360,14 @@ class Twitch(object):
                             f"Drop '{campaign.name}' ({campaign.game_name()}): {status}",
                             extra={"emoji": ":mag:", "event": Events.DROP_SCAN},
                         )
-                for campaign in active_campaigns:
+                # Only one channel can earn drop progress. Do not populate the
+                # streamer list with candidates for campaigns we cannot watch yet.
+                for campaign in sorted(
+                    active_campaigns,
+                    key=lambda c: not any("BADGE" in d.benefit_types for d in c.drops),
+                ):
+                    if covered_ids:
+                        break
                     if (
                         campaign.id.startswith(PROGRESSION_PREFIX)
                         or campaign.id in covered_ids
@@ -2296,6 +2379,16 @@ class Twitch(object):
                     self.__discover_directory_channels(
                         campaign, streamers, discovered_streamers, directory_channels
                     )
+                    if directory_channels.get(campaign.id):
+                        break
+
+                has_drop_target = bool(covered_ids or directory_channels)
+                if not has_drop_target and (
+                    had_drop_target
+                    or time.time() - campaigns_update >= DIRECTORY_SEARCH_INTERVAL
+                ):
+                    campaigns_update = 0
+                had_drop_target = has_drop_target
 
             except (
                 ValueError,

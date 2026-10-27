@@ -196,6 +196,20 @@ class StreakWatchLoopTests(unittest.TestCase):
             {"first": (first, WATCH_REASONS[Priority.DROPS])},
         )
 
+    def test_followed_drop_precedes_external_badge(self):
+        from test_drops import campaign_data, drop_data
+
+        own, external = online("own"), online("external")
+        own.stream.campaigns = [
+            Campaign(campaign_data([drop_data(distribution="IN_GAME")]))
+        ]
+        external.stream.campaigns = [Campaign(campaign_data([drop_data()]))]
+        external.drops_only = True
+        self.assertEqual(
+            self.run_iteration([external, own], [Priority.DROPS]),
+            {"own": (own, WATCH_REASONS[Priority.DROPS])},
+        )
+
     def test_deselected_channel_does_not_count_gap(self):
         alice, bob = online("alice"), online("bob")
         alice.settings.watch_streak = False

@@ -640,6 +640,7 @@ class DirectoryDiscoveryTests(unittest.TestCase):
         self.assertEqual(channels, [("1", "streamerone"), ("2", "two")])
         sent = post.call_args[0][0]
         self.assertEqual(sent["variables"]["slug"], "alien-isolation")
+        self.assertEqual(sent["variables"]["limit"], 1)
         self.assertIn("DROPS_ENABLED", sent["variables"]["options"]["systemFilters"])
 
     def test_directory_errors_return_no_channels(self):
@@ -655,15 +656,18 @@ class DirectoryDiscoveryTests(unittest.TestCase):
             Twitch,
             "get_drops_enabled_channels",
             return_value=[("1", "a"), ("2", "b"), ("3", "c"), ("4", "d")],
-        ), patch.object(Twitch, "_Twitch__get_available_drop_campaigns", return_value={}):
+        ), patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns", return_value={}
+        ) as available:
             self.twitch._Twitch__discover_directory_channels(
                 campaign, streamers, discovered, directory_channels
             )
 
-        self.assertEqual(directory_channels["campaign-1"], {"1", "2", "3"})
-        self.assertEqual([s.username for s in streamers], ["a", "b", "c"])
+        self.assertEqual(directory_channels["campaign-1"], {"1"})
+        self.assertEqual([s.username for s in streamers], ["a"])
         self.assertTrue(all(s.notify is False for s in streamers))
         self.assertTrue(all(s.settings.claim_drops for s in streamers))
+        available.assert_called_once_with(["1"])
 
     def test_channels_running_other_campaigns_are_skipped(self):
         campaign = Campaign(campaign_data([drop_data()]))
@@ -681,13 +685,16 @@ class DirectoryDiscoveryTests(unittest.TestCase):
             return_value=[("1", "a"), ("2", "b"), ("3", "c")],
         ), patch.object(
             Twitch, "_Twitch__get_available_drop_campaigns", return_value=offered
-        ):
+        ) as available:
             self.twitch._Twitch__discover_directory_channels(
                 campaign, streamers, discovered, directory_channels
             )
 
         self.assertEqual(directory_channels["campaign-1"], {"2"})
         self.assertEqual([s.username for s in streamers], ["b"])
+        self.assertEqual(
+            [call.args[0] for call in available.call_args_list], [["1"], ["2"]]
+        )
 
     def test_campaign_matching_uses_id_not_campaign_or_reward_name(self):
         data = campaign_data([drop_data()])
@@ -906,6 +913,130 @@ def available_drops_entry(campaign_id="campaign-1", game_id="12345"):
     return data
 
 
+class LazyDropSyncTests(unittest.TestCase):
+    def run_sync(
+        self, streamers, iterations=2, after_iteration=None, online=True, campaign_count=100
+    ):
+        twitch = Twitch.__new__(Twitch)
+        twitch.running = True
+        data = []
+        for index in range(campaign_count):
+            entry = campaign_data([drop_data(drop_id=f"drop-{index}")])
+            entry["id"] = f"campaign-{index}"
+            entry["game"]["id"] = str(index)
+            data.append(entry)
+        rounds = []
+
+        def check(streamer):
+            streamer.is_online = online
+            streamer.stream.game = dict(data[int(streamer.channel_id)]["game"])
+
+        def sleep(*args, **kwargs):
+            rounds.append([s.channel_id for s in streamers if s.drops_condition()])
+            if after_iteration:
+                after_iteration(streamers, len(rounds))
+            if len(rounds) >= iterations:
+                twitch.running = False
+
+        with patch.object(Settings, "logger", LoggerSettings(less=True)), patch.dict(
+            os.environ, {"POKEMON_AUTO_ROTATE": "false"}
+        ), patch.object(
+            Twitch, "_Twitch__get_stream_database_badges", return_value=([], None)
+        ), patch.object(
+            Twitch, "_Twitch__get_twitchdrops_games", return_value=([], None)
+        ), patch.object(
+            Twitch, "_Twitch__get_drops_dashboard", return_value=[]
+        ), patch.object(
+            Twitch, "_Twitch__get_inventory",
+            return_value={"dropCampaignsInProgress": data},
+        ), patch.object(
+            Twitch, "_Twitch__discover_campaigns", return_value=([], 0, [])
+        ) as discover, patch.object(
+            Twitch, "_Twitch__sync_campaigns", side_effect=lambda campaigns: campaigns
+        ), patch.object(
+            Twitch, "_Twitch__channels_offering_campaign",
+            side_effect=lambda campaign, channels: channels,
+        ), patch.object(
+            Twitch, "get_drops_enabled_channels",
+            side_effect=lambda game: [(game["id"], "channel" + game["id"])],
+        ) as directory, patch.object(
+            Twitch, "check_streamer_online", side_effect=check
+        ) as checks, patch.object(
+            Twitch, "_Twitch__chuncked_sleep", side_effect=sleep
+        ):
+            twitch.sync_campaigns(streamers)
+        return rounds, directory, checks, discover
+
+    def test_hundred_campaigns_add_and_refresh_only_one_external_channel(self):
+        streamers = []
+        rounds, directory, checks, _ = self.run_sync(streamers)
+        self.assertEqual(len(streamers), 1)
+        directory.assert_called_once()
+        checks.assert_called_once_with(streamers[0])
+        self.assertEqual(rounds[-1], ["0"])
+
+    def test_followed_channel_prevents_all_external_channel_additions(self):
+        own = Streamer("own", settings=StreamerSettings(claim_drops=True))
+        own.channel_id = "0"
+        own.is_online = True
+        own.stream.game = {"id": "0", "displayName": "Alien"}
+        own.stream.campaigns_ids = ["campaign-0"]
+        streamers = [own]
+        rounds, directory, checks, _ = self.run_sync(streamers)
+        self.assertEqual(streamers, [own])
+        directory.assert_not_called()
+        checks.assert_not_called()
+        self.assertEqual(rounds, [["0"], ["0"]])
+
+    def test_offline_external_channel_is_not_kept_in_polling_set(self):
+        streamers = []
+        _, _, checks, _ = self.run_sync(streamers, iterations=4, online=False)
+        checked_ids = [call.args[0].channel_id for call in checks.call_args_list]
+        self.assertEqual(len(checked_ids), len(set(checked_ids)))
+
+    def test_completed_campaign_releases_slot_for_next_campaign(self):
+        def complete(streamers, iteration):
+            if iteration == 2:
+                streamers[0].stream.campaigns[0].drops.clear()
+
+        streamers = []
+        rounds, directory, _, _ = self.run_sync(
+            streamers, iterations=4, after_iteration=complete
+        )
+        self.assertEqual(directory.call_count, 2)
+        self.assertEqual(rounds[-1], ["1"])
+        self.assertLessEqual(max(map(len, rounds)), 1)
+
+    def test_completion_of_last_campaign_requests_fresh_discovery(self):
+        def complete(streamers, iteration):
+            if iteration == 2:
+                streamers[0].stream.campaigns[0].drops.clear()
+
+        _, _, _, discover = self.run_sync(
+            [], iterations=4, after_iteration=complete, campaign_count=1
+        )
+        self.assertEqual(discover.call_count, 2)
+
+    def test_followed_channel_coming_online_releases_external_target(self):
+        own = Streamer("own", settings=StreamerSettings(claim_drops=True))
+        own.channel_id = "1"
+        own.stream.game = {"id": "1", "displayName": "Alien"}
+        own.stream.campaigns_ids = ["campaign-1"]
+
+        def go_online(streamers, iteration):
+            if iteration == 2:
+                own.is_online = True
+
+        streamers = [own]
+        rounds, directory, _, _ = self.run_sync(
+            streamers, iterations=4, after_iteration=go_online
+        )
+        directory.assert_called_once()
+        self.assertEqual(rounds[-1], ["1"])
+        self.assertFalse(streamers[1].is_online)
+        self.assertEqual(streamers[1].stream.campaigns, [])
+
+
 class AvailableDropsCampaignTests(unittest.TestCase):
     def test_builds_campaign_restricted_to_the_channel_it_was_found_on(self):
         data = twitch_module._campaign_from_available_drops(
@@ -940,7 +1071,7 @@ class CampaignDiscoveryTests(unittest.TestCase):
         streamer.stream.drops_tags = True
         return streamer
 
-    def test_discovers_campaigns_on_own_and_directory_channels(self):
+    def test_followed_channel_with_drop_skips_directory_search(self):
         own = self._live_streamer("mine", "1")
         responses = [
             {"data": {"channel": {"viewerDropCampaigns": [available_drops_entry()]}}},
@@ -951,17 +1082,18 @@ class CampaignDiscoveryTests(unittest.TestCase):
             Twitch,
             "get_drops_enabled_channels",
             return_value=[("1", "mine"), ("2", "other"), ("3", "third")],
-        ):
+        ) as directory:
             discovered, probed, categories = self.twitch._Twitch__discover_campaigns([own], [])
 
-        self.assertEqual(probed, 3)
-        self.assertEqual(categories, ["Alien: Isolation"])
+        directory.assert_not_called()
+        self.assertEqual(probed, 1)
+        self.assertEqual(categories, [])
         self.assertEqual(len(discovered), 1)
         self.assertEqual(
-            [c["id"] for c in discovered[0]["allow"]["channels"]], ["1", "2"]
+            [c["id"] for c in discovered[0]["allow"]["channels"]], ["1"]
         )
         sent = post.call_args.args[0]
-        self.assertEqual([op["variables"] for op in sent], [{"channelID": "1"}, {"channelID": "2"}, {"channelID": "3"}])
+        self.assertEqual([op["variables"] for op in sent], [{"channelID": "1"}])
         self.assertEqual(
             sent[0]["extensions"]["persistedQuery"]["sha256Hash"],
             GQLOperations.FallbackHashes["DropsHighlightService_AvailableDrops"],
@@ -997,6 +1129,86 @@ class CampaignDiscoveryTests(unittest.TestCase):
         self.assertEqual(categories, ["Alien: Isolation"])
         self.assertEqual(discovered[0]["id"], "campaign-1")
         self.assertEqual(discovered[0]["game"]["id"], "12345")
+
+    def test_external_search_stops_at_first_usable_category_and_channel(self):
+        games = [{"name": str(i), "slug": str(i)} for i in range(100)]
+        with patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns",
+            return_value={"42": [available_drops_entry()]},
+        ) as available, patch.object(
+            Twitch, "get_drops_enabled_channels",
+            return_value=[("42", "first"), ("43", "second")],
+        ) as directory:
+            discovered, probed, _ = self.twitch._Twitch__discover_campaigns(
+                [], [], drop_games=games
+            )
+        directory.assert_called_once_with(games[0])
+        available.assert_called_once_with({"42": "first"})
+        self.assertEqual(probed, 1)
+        self.assertEqual(discovered[0]["allow"]["channels"], [{"id": "42", "name": "first"}])
+
+    def test_followed_drop_is_checked_before_badge_named_channels(self):
+        own = self._live_streamer("mine", "1")
+        badge = WatchBadge(
+            "badge", "Badge", 30, [], [("42", "external")],
+            datetime.now(), datetime.now() + timedelta(days=1),
+        )
+        with patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns",
+            return_value={"1": [available_drops_entry()]},
+        ) as available, patch.object(Twitch, "get_drops_enabled_channels") as directory:
+            self.twitch._Twitch__discover_campaigns([own], [], [badge])
+        available.assert_called_once_with({"1": "mine"})
+        directory.assert_not_called()
+
+    def test_completed_followed_campaign_does_not_block_external_discovery(self):
+        own = self._live_streamer("mine", "1")
+        completed = campaign_data([drop_data()])
+        completed["timeBasedDrops"][0]["self"] = {
+            "hasPreconditionsMet": True, "currentMinutesWatched": 30,
+            "dropInstanceID": None, "isClaimed": True,
+        }
+        with patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns",
+            side_effect=[
+                {"1": [available_drops_entry()]},
+                {"42": [available_drops_entry("other")]},
+            ],
+        ), patch.object(
+            Twitch, "get_drops_enabled_channels", return_value=[("42", "external")]
+        ) as directory:
+            discovered, probed, _ = self.twitch._Twitch__discover_campaigns(
+                [own], [completed]
+            )
+        directory.assert_called_once()
+        self.assertEqual(probed, 2)
+        self.assertEqual([c["id"] for c in discovered], ["other"])
+
+    def test_known_followed_campaign_records_confirmed_channel_without_search(self):
+        own = self._live_streamer("mine", "1")
+        with patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns",
+            return_value={"1": [available_drops_entry()]},
+        ), patch.object(Twitch, "get_drops_enabled_channels") as directory:
+            discovered, _, _ = self.twitch._Twitch__discover_campaigns(
+                [own], [campaign_data([drop_data()])]
+            )
+        self.assertEqual(discovered, [])
+        self.assertEqual(own.stream.campaigns_ids, ["campaign-1"])
+        directory.assert_not_called()
+
+    def test_followed_inventory_target_survives_omitted_channel_campaign(self):
+        own = self._live_streamer("mine", "1")
+        own.stream.campaigns = [Campaign(campaign_data([drop_data()]))]
+        own.stream.campaigns_ids = ["campaign-1"]
+        with patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns", return_value={"1": []}
+        ), patch.object(Twitch, "get_drops_enabled_channels") as directory:
+            self.twitch._Twitch__discover_campaigns(
+                [own], [campaign_data([drop_data()])]
+            )
+        self.assertEqual(own.stream.campaigns_ids, ["campaign-1"])
+        directory.assert_not_called()
 
     def test_site_hint_without_twitch_confirmation_creates_no_campaign(self):
         with patch.object(
