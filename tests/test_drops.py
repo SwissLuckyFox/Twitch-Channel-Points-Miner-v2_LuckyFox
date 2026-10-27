@@ -309,6 +309,9 @@ class ClaimDropMessageTests(unittest.TestCase):
         with patch.dict(os.environ, {"POKEMON_AUTO_ROTATE": "false"}), patch.object(
             Twitch, "_Twitch__get_stream_database_badges", return_value=([badge], None)
         ), patch.object(
+            Twitch, "_Twitch__get_twitchdrops_games",
+            return_value=([{"name": "Hunt", "slug": "hunt-showdown"}], None)
+        ), patch.object(
             Twitch, "_Twitch__get_drops_dashboard", return_value=[]
         ), patch.object(
             Twitch, "_Twitch__get_inventory", return_value=inventory
@@ -316,7 +319,7 @@ class ClaimDropMessageTests(unittest.TestCase):
             Twitch, "get_owned_badges", return_value=(set(), set())
         ), patch.object(
             Twitch, "_Twitch__discover_campaigns", return_value=([], 0, [])
-        ), patch.object(
+        ) as discover, patch.object(
             Twitch, "_Twitch__badge_fallback_campaigns", return_value=[]
         ), patch.object(
             Twitch, "_Twitch__request_claim_drop", return_value=True
@@ -326,6 +329,9 @@ class ClaimDropMessageTests(unittest.TestCase):
             "TwitchChannelPointsMiner.classes.Twitch", "INFO"
         ) as logs:
             self.twitch.sync_campaigns([])
+        self.assertEqual(
+            discover.call_args.args[3], [{"name": "Hunt", "slug": "hunt-showdown"}]
+        )
         claims = [
             record for record in logs.records
             if getattr(record, "telegram_pin_key", None) == "badge:hunt white"
@@ -972,6 +978,73 @@ class CampaignDiscoveryTests(unittest.TestCase):
             )
         self.assertEqual(discovered, [])
         self.assertEqual(probed, 1)
+
+    def test_site_category_discovers_twitch_confirmed_campaign(self):
+        response = [{
+            "data": {"channel": {"viewerDropCampaigns": [available_drops_entry()]}}
+        }]
+        game = {"name": "Alien: Isolation", "slug": "alien-isolation"}
+        with patch.object(
+            Twitch, "post_gql_request", return_value=response
+        ), patch.object(
+            Twitch, "get_drops_enabled_channels", return_value=[("42", "unter")]
+        ) as directory:
+            discovered, probed, categories = self.twitch._Twitch__discover_campaigns(
+                [], [], drop_games=[game]
+            )
+        directory.assert_called_once_with(game)
+        self.assertEqual(probed, 1)
+        self.assertEqual(categories, ["Alien: Isolation"])
+        self.assertEqual(discovered[0]["id"], "campaign-1")
+        self.assertEqual(discovered[0]["game"]["id"], "12345")
+
+    def test_site_hint_without_twitch_confirmation_creates_no_campaign(self):
+        with patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns", return_value={"42": []}
+        ), patch.object(
+            Twitch, "get_drops_enabled_channels", return_value=[("42", "unter")]
+        ):
+            discovered, _, _ = self.twitch._Twitch__discover_campaigns(
+                [], [], drop_games=[{"name": "Alien", "slug": "alien"}]
+            )
+        self.assertEqual(discovered, [])
+
+    def test_site_and_badge_categories_are_probed_once(self):
+        badge = WatchBadge(
+            "alien", "Alien", 30,
+            [{"id": "12345", "name": "Alien: Isolation", "slug": "alien-isolation"}],
+            [], datetime.now(), datetime.now() + timedelta(days=1),
+        )
+        with patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns", return_value={}
+        ), patch.object(
+            Twitch, "get_drops_enabled_channels", return_value=[]
+        ) as directory:
+            self.twitch._Twitch__discover_campaigns(
+                [], [], [badge], [{"name": "Alien", "slug": "alien-isolation"}]
+            )
+        directory.assert_called_once()
+
+    def test_site_failure_warns_and_keeps_other_sources_available(self):
+        import requests
+
+        with patch.object(
+            twitch_module, "fetch_drop_games", side_effect=requests.exceptions.Timeout()
+        ), self.assertLogs("TwitchChannelPointsMiner.classes.Twitch", "WARNING") as logs:
+            games, error = self.twitch._Twitch__get_twitchdrops_games()
+        self.assertEqual(games, [])
+        self.assertEqual(error, "Timeout")
+        self.assertIn("using Stream Database", logs.output[0])
+
+    def test_scan_sources_reports_both_external_sites(self):
+        stats = {
+            "probed_channels": 2, "streamdb": 1, "twitchdrops": 5,
+        }
+        sources = twitch_module._scan_sources(stats)
+        self.assertIn("Stream Database: 1 running watch badge(s)", sources)
+        self.assertIn("twitchdrops.app: 5 watch-drop categories", sources)
+        stats["twitchdrops_error"] = "Timeout"
+        self.assertIn("twitchdrops.app unavailable", twitch_module._scan_sources(stats))
 
 
 class StreamLoadTests(unittest.TestCase):

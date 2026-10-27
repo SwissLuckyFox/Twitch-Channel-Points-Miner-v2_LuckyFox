@@ -324,6 +324,8 @@ class ProgressionRotationTests(unittest.TestCase):
         ), patch.object(
             Twitch, "_Twitch__get_stream_database_badges", return_value=([], None)
         ), patch.object(
+            Twitch, "_Twitch__get_twitchdrops_games", return_value=([], None)
+        ), patch.object(
             Twitch, "_Twitch__get_drops_dashboard", return_value=[]
         ), patch.object(
             Twitch, "_Twitch__get_inventory", return_value={}

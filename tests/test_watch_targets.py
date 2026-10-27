@@ -162,6 +162,40 @@ class StreakWatchLoopTests(unittest.TestCase):
             targets, {"unter": (unter, WATCH_REASONS[Priority.DROPS])}
         )
 
+    def test_badges_take_precedence_over_game_items(self):
+        from test_drops import campaign_data, drop_data
+
+        item, badge = online("item"), online("badge")
+        item.stream.campaigns = [
+            Campaign(campaign_data([drop_data(distribution="DIRECT_ENTITLEMENT")]))
+        ]
+        badge.stream.campaigns = [Campaign(campaign_data([drop_data()]))]
+        self.assertEqual(
+            self.run_iteration([item, badge], [Priority.DROPS]),
+            {"badge": (badge, WATCH_REASONS[Priority.DROPS])},
+        )
+        badge.stream.campaigns[0].drops[0].is_claimed = True
+        self.assertEqual(
+            self.run_iteration([item, badge], [Priority.DROPS]),
+            {"item": (item, WATCH_REASONS[Priority.DROPS])},
+        )
+        badge.stream.campaigns[0].drops[0].is_claimed = False
+        self.assertEqual(
+            self.run_iteration([item, badge], [Priority.DROPS]),
+            {"badge": (badge, WATCH_REASONS[Priority.DROPS])},
+        )
+
+    def test_badge_priority_preserves_order_between_badges(self):
+        from test_drops import campaign_data, drop_data
+
+        first, second = online("first"), online("second")
+        for streamer in (first, second):
+            streamer.stream.campaigns = [Campaign(campaign_data([drop_data()]))]
+        self.assertEqual(
+            self.run_iteration([first, second], [Priority.DROPS]),
+            {"first": (first, WATCH_REASONS[Priority.DROPS])},
+        )
+
     def test_deselected_channel_does_not_count_gap(self):
         alice, bob = online("alice"), online("bob")
         alice.settings.watch_streak = False

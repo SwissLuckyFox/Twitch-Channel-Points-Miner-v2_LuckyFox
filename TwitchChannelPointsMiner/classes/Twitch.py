@@ -36,6 +36,7 @@ from TwitchChannelPointsMiner.classes.Settings import (
 )
 from TwitchChannelPointsMiner.classes.TwitchLogin import TwitchLogin
 from TwitchChannelPointsMiner.classes.StreamDatabase import fetch_watch_badges
+from TwitchChannelPointsMiner.classes.TwitchDrops import fetch_drop_games
 from TwitchChannelPointsMiner.classes.ProgressionDrops import (
     PROGRESSION_PREFIX,
     ProgressionDrops,
@@ -347,6 +348,13 @@ def _scan_sources(stats):
             if stats.get("streamdb_earned"):
                 streamdb += f", {stats['streamdb_earned']} already earned"
         sources = f"{streamdb}; {sources}"
+    if "twitchdrops" in stats:
+        site = (
+            "twitchdrops.app unavailable"
+            if stats.get("twitchdrops_error")
+            else f"twitchdrops.app: {stats['twitchdrops']} watch-drop categories"
+        )
+        sources = f"{site}; {sources}"
     return sources
 
 
@@ -1096,7 +1104,15 @@ class Twitch(object):
                     elif prior == Priority.DROPS and len(streamers_watching) < 2:
                         # Drop progress is only earned on one channel at a time, so a
                         # single slot is enough; the other one keeps the normal routine.
-                        for index in streamers_index:
+                        drop_indices = sorted(
+                            streamers_index,
+                            key=lambda index: not any(
+                                not drop.is_claimed and "BADGE" in drop.benefit_types
+                                for campaign in streamers[index].stream.campaigns
+                                for drop in campaign.drops
+                            ),
+                        )
+                        for index in drop_indices:
                             if (
                                 index not in streamers_watching
                                 and streamers[index].drops_condition() is True
@@ -1878,6 +1894,17 @@ class Twitch(object):
             logger.debug(f"Stream Database: {badge!r}")
         return badges, None
 
+    def __get_twitchdrops_games(self):
+        try:
+            return fetch_drop_games(), None
+        except (requests.exceptions.RequestException, ValueError) as error:
+            logger.warning(
+                "Drop scan: twitchdrops.app is unavailable (%s); "
+                "using Stream Database, live channels and inventory",
+                error,
+            )
+            return [], str(error) or error.__class__.__name__
+
     def get_owned_badges(self):
         """
         (set IDs, titles) of the global chat badges the account owns, both lowercased,
@@ -1936,14 +1963,14 @@ class Twitch(object):
                 result.append(data)
         return result
 
-    def __discover_campaigns(self, streamers, known_campaigns, badges=()):
+    def __discover_campaigns(self, streamers, known_campaigns, badges=(), drop_games=()):
         """
         Twitch no longer gives app clients the campaign list (ViewerDropsDashboard and
         DropCampaignDetails return null since ~Sep 2026), but the per-channel AvailableDrops
         query still works. Probe channels for campaigns that are not known yet:
         the channels/categories of Stream Database watch badges first, then the user's live
         channels and live drops-enabled channels of the relevant categories (games of known
-        campaigns and of the user's live streams with drops enabled).
+        campaigns, the user's live streams with drops enabled, and twitchdrops.app hints).
         Returns (campaign data list, number of probed channels, category names).
         """
         channels = {}
@@ -1978,7 +2005,16 @@ class Twitch(object):
                 game = streamer.stream.game
                 if streamer.stream.drops_tags and isinstance(game, dict) and game.get("id"):
                     games.setdefault(str(game["id"]), game)
-        for game in games.values():
+        # Site categories have slugs, not Twitch game IDs. Probe them after badge
+        # categories, deduplicating by directory slug rather than inventing IDs.
+        search_games = {}
+        for game in list(games.values()) + list(drop_games):
+            slug = game.get("slug") or _game_slug(
+                game.get("displayName") or game.get("name")
+            )
+            if slug:
+                search_games.setdefault(slug, game)
+        for game in search_games.values():
             if not self.running:
                 break
             for channel_id, login in self.get_drops_enabled_channels(game):
@@ -2018,7 +2054,7 @@ class Twitch(object):
         categories = sorted(
             {
                 game.get("displayName") or game.get("name")
-                for game in games.values()
+                for game in search_games.values()
                 if game.get("displayName") or game.get("name")
             }
         )
@@ -2046,10 +2082,10 @@ class Twitch(object):
                     or ((time.time() - campaigns_update) / 60) > 60
                 ):
                     campaigns_update = time.time()
-                    # Main source: Stream Database's list of running watch badges. Twitch
-                    # (AvailableDrops on their channels/categories) confirms the campaigns;
-                    # the inventory adds campaigns that were already started.
+                    # External sites supply discovery hints; Twitch confirms
+                    # campaigns and inventory supplies authoritative progress.
                     badges, streamdb_error = self.__get_stream_database_badges()
+                    drop_games, twitchdrops_error = self.__get_twitchdrops_games()
                     known_badge_titles = {
                         badge.title.strip().lower() for badge in badges
                     }
@@ -2089,7 +2125,7 @@ class Twitch(object):
                         }
                     )
                     discovered, probed, categories = self.__discover_campaigns(
-                        streamers, list(known.values()), open_badges
+                        streamers, list(known.values()), open_badges, drop_games
                     )
                     if not self.running:
                         break
@@ -2109,6 +2145,8 @@ class Twitch(object):
                         "streamdb": len(badges),
                         "streamdb_earned": len(badges) - len(open_badges),
                         "streamdb_error": streamdb_error,
+                        "twitchdrops": len(drop_games),
+                        "twitchdrops_error": twitchdrops_error,
                     }
 
                     # Going to clear array and structure. Remove all the timeBasedDrops expired or not started yet
