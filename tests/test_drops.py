@@ -1204,6 +1204,27 @@ class CampaignDiscoveryTests(unittest.TestCase):
             )
         self.assertEqual(discovered[0]["game"]["slug"], "pokemon-go")
 
+    def test_skipped_campaign_on_followed_channel_does_not_stop_search(self):
+        # A followed channel offering the Pokemon campaign (managed separately) must
+        # not end discovery when the Pokemon module has nothing left to farm.
+        own = self._live_streamer("mine", "1")
+        pokemon = available_drops_entry("pokemon")
+        albion = available_drops_entry("albion", "777")
+        albion["timeBasedDrops"][0]["benefitEdges"][0]["benefit"]["id"] = "b2"
+        offers = {"1": [pokemon], "42": [albion]}
+        with patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns",
+            side_effect=lambda ch: {cid: offers[cid] for cid in ch},
+        ), patch.object(
+            Twitch, "get_drops_enabled_channels", return_value=[("42", "partner")]
+        ):
+            discovered, probed, _ = self.twitch._Twitch__discover_campaigns(
+                [own], [], drop_games=[{"name": "Albion Online", "slug": "albion-online"}],
+                skip=lambda campaign: campaign.id == "pokemon",
+            )
+        self.assertEqual([c["id"] for c in discovered], ["albion"])
+        self.assertEqual(probed, 2)
+
     def test_earned_campaign_does_not_end_the_category_search(self):
         earned = available_drops_entry("earned")
         fresh = available_drops_entry("fresh")

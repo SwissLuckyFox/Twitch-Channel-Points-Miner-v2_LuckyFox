@@ -73,6 +73,15 @@ class ProgressionDrops:
         data = response.get("data") if isinstance(response, dict) else None
         errors = response.get("errors") if isinstance(response, dict) else None
         value = data.get(field) if isinstance(data, dict) else None
+        if (
+            field == "channelDropCampaignsProgress"
+            and not errors
+            and isinstance(data, dict)
+            and value is None
+        ):
+            # Twitch answers null (not an error) when the channel has no progression
+            # campaign left for this account, e.g. after all Pokemon were earned.
+            return []
         expected = (
             list
             if field in ("trackSelections", "channelDropCampaignsProgress")
@@ -226,6 +235,8 @@ class ProgressionDrops:
             "channelDropCampaignsProgress",
         )
         if not isinstance(campaigns, list):
+            return []
+        if not campaigns:
             return []
         user = self.query(
             GQLOperations.DropsChannelCategory, {"channelID": channel_id}, "user"

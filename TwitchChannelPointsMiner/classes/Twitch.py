@@ -1997,8 +1997,13 @@ class Twitch(object):
         drop_games=(),
         claimed_benefits=None,
         owned_titles=None,
+        skip=None,
     ):
-        """Check followed/configured channels first, then stop at one usable external channel."""
+        """
+        Check followed/configured channels first, then stop at one usable external channel.
+        skip(campaign) excludes campaigns handled elsewhere (Pokemon progression), so
+        they neither count as usable nor end the search.
+        """
         claimed_benefits = claimed_benefits or {}
         owned = {"titles": owned_titles}
 
@@ -2101,6 +2106,8 @@ class Twitch(object):
                         candidate = Campaign(known.get(campaign_id, campaign), badge_titles)
                     except (KeyError, TypeError, ValueError) as error:
                         logger.debug("Skipping unreadable drop campaign: %r", error)
+                        continue
+                    if skip is not None and skip(candidate):
                         continue
                     for progress in (known.get(campaign_id, {}).get("timeBasedDrops") or []):
                         if isinstance(progress.get("self"), dict):
@@ -2226,6 +2233,7 @@ class Twitch(object):
                         drop_games,
                         _claimed_benefits(inventory),
                         owned_titles,
+                        progression.manages if progression is not None else None,
                     )
                     if not self.running:
                         break

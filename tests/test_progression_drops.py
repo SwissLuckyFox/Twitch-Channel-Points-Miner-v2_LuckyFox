@@ -251,6 +251,16 @@ class ProgressionRotationTests(unittest.TestCase):
         self.streamer.is_online = False
         self.assertEqual(self.sync(), [])
 
+    def test_null_campaign_progress_without_errors_is_quiet(self):
+        def post(request):
+            if request["operationName"] == "WithIsStreamLiveQuery":
+                return {"data": {"user": {"stream": {"id": "stream"}}}}
+            return {"data": {"channelDropCampaignsProgress": None}}
+
+        with patch.object(Twitch, "post_gql_request", side_effect=post), \
+                self.assertNoLogs(level="WARNING"):
+            self.assertEqual(self.miner.load("1", "channel", datetime.utcnow()), [])
+
     def test_directory_discovers_channel_without_configured_streamers(self):
         result = self.miner.sync([])
         self.assertEqual(result[0][1], ("1", "channel"))
