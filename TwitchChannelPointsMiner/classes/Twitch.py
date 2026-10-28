@@ -62,6 +62,10 @@ DIRECTORY_SEARCH_LIMIT = 1
 # Campaigns with a channel allow-list: how many live category streams to scan for
 # allow-listed channels (instead of polling every allow-listed channel).
 ALLOW_LIST_SEARCH_LIMIT = 30
+# Category discovery: live drops-enabled channels asked (in one batched request)
+# whether they offer a campaign. Many campaigns only run on partner channels, so the
+# top stream alone is not enough; still only the first matching channel is watched.
+DISCOVERY_PROBE_LIMIT = 20
 # Stream Database badges Twitch never confirms (no progress in the inventory) are
 # given up after this long, so the miner doesn't watch a category forever.
 STREAMDB_FALLBACK_SECONDS = 12 * 60 * 60
@@ -1778,7 +1782,9 @@ class Twitch(object):
         self, campaign, streamers, discovered_streamers, directory_channels
     ):
         if campaign.any_channel:
-            found = self.get_drops_enabled_channels(campaign.game)
+            found = self.get_drops_enabled_channels(
+                campaign.game, limit=DISCOVERY_PROBE_LIMIT
+            )
         else:
             # Look deeper into the category, then keep only allow-listed channels.
             allowed = {str(channel_id) for channel_id in campaign.channels}
@@ -1794,14 +1800,9 @@ class Twitch(object):
                 f"No live drops-enabled channel found for campaign {campaign.name}"
             )
             return
-        checked_count = 0
-        matching = []
-        for channel in found:
-            checked_count += 1
-            matching = self.__channels_offering_campaign(campaign, [channel])
-            if matching:
-                break
-        found = matching
+        checked_count = len(found)
+        # One batched AvailableDrops request; only the first match is watched.
+        found = self.__channels_offering_campaign(campaign, found)
         if not found:
             logger.info(
                 f"Drop '{campaign.name}' ({campaign.game_name()}): none of the "
@@ -2058,7 +2059,7 @@ class Twitch(object):
         categories = []
         badge_titles = {badge.title.strip().lower() for badge in badges}
 
-        def probe(channels):
+        def probe(channels, category=None):
             channels = {cid: login for cid, login in channels.items() if cid not in checked}
             if not channels:
                 return False
@@ -2086,6 +2087,16 @@ class Twitch(object):
                     )
                     if campaign is None:
                         continue
+                    # Keep the probed category's directory slug; deriving it from the
+                    # name fails for names such as "Pokémon GO" (slug "pokemon-go").
+                    if (
+                        category
+                        and category.get("slug")
+                        and not campaign["game"].get("slug")
+                        and _game_slug(campaign["game"].get("displayName"))
+                        == _game_slug(category.get("displayName") or category.get("name"))
+                    ):
+                        campaign["game"]["slug"] = category["slug"]
                     try:
                         candidate = Campaign(known.get(campaign_id, campaign), badge_titles)
                     except (KeyError, TypeError, ValueError) as error:
@@ -2137,8 +2148,8 @@ class Twitch(object):
             if not self.running:
                 break
             categories.append(game.get("displayName") or game.get("name"))
-            found = self.get_drops_enabled_channels(game)
-            if found and probe(dict(found[:1])):
+            found = self.get_drops_enabled_channels(game, limit=DISCOVERY_PROBE_LIMIT)
+            if found and probe(dict(found), game):
                 break
         return list(discovered.values()), len(checked), sorted(filter(None, categories))
 

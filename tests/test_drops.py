@@ -705,7 +705,7 @@ class DirectoryDiscoveryTests(unittest.TestCase):
         self.assertEqual([s.username for s in streamers], ["a"])
         self.assertTrue(all(s.notify is False for s in streamers))
         self.assertTrue(all(s.settings.claim_drops for s in streamers))
-        available.assert_called_once_with(["1"])
+        available.assert_called_once_with(["1", "2", "3", "4"])
 
     def test_channels_running_other_campaigns_are_skipped(self):
         campaign = Campaign(campaign_data([drop_data()]))
@@ -731,7 +731,7 @@ class DirectoryDiscoveryTests(unittest.TestCase):
         self.assertEqual(directory_channels["campaign-1"], {"2"})
         self.assertEqual([s.username for s in streamers], ["b"])
         self.assertEqual(
-            [call.args[0] for call in available.call_args_list], [["1"], ["2"]]
+            [call.args[0] for call in available.call_args_list], [["1", "2", "3"]]
         )
 
     def test_campaign_matching_uses_id_not_campaign_or_reward_name(self):
@@ -996,7 +996,7 @@ class LazyDropSyncTests(unittest.TestCase):
             side_effect=lambda campaign, channels: channels,
         ), patch.object(
             Twitch, "get_drops_enabled_channels",
-            side_effect=lambda game: [(game["id"], "channel" + game["id"])],
+            side_effect=lambda game, limit=1: [(game["id"], "channel" + game["id"])],
         ) as directory, patch.object(
             Twitch, "check_streamer_online", side_effect=check
         ) as checks, patch.object(
@@ -1165,7 +1165,7 @@ class CampaignDiscoveryTests(unittest.TestCase):
             discovered, probed, categories = self.twitch._Twitch__discover_campaigns(
                 [], [], drop_games=[game]
             )
-        directory.assert_called_once_with(game)
+        directory.assert_called_once_with(game, limit=twitch_module.DISCOVERY_PROBE_LIMIT)
         self.assertEqual(probed, 1)
         self.assertEqual(categories, ["Alien: Isolation"])
         self.assertEqual(discovered[0]["id"], "campaign-1")
@@ -1175,18 +1175,34 @@ class CampaignDiscoveryTests(unittest.TestCase):
         games = [{"name": str(i), "slug": str(i)} for i in range(100)]
         with patch.object(
             Twitch, "_Twitch__get_available_drop_campaigns",
-            return_value={"42": [available_drops_entry()]},
+            return_value={"42": [], "43": [available_drops_entry()]},
         ) as available, patch.object(
             Twitch, "get_drops_enabled_channels",
-            return_value=[("42", "first"), ("43", "second")],
+            return_value=[("42", "first"), ("43", "partner")],
         ) as directory:
             discovered, probed, _ = self.twitch._Twitch__discover_campaigns(
                 [], [], drop_games=games
             )
-        directory.assert_called_once_with(games[0])
-        available.assert_called_once_with({"42": "first"})
-        self.assertEqual(probed, 1)
-        self.assertEqual(discovered[0]["allow"]["channels"], [{"id": "42", "name": "first"}])
+        directory.assert_called_once_with(games[0], limit=twitch_module.DISCOVERY_PROBE_LIMIT)
+        # The whole category page is asked in one batch, so a partner-only campaign
+        # is found even if the most-watched stream does not offer it.
+        available.assert_called_once_with({"42": "first", "43": "partner"})
+        self.assertEqual(probed, 2)
+        self.assertEqual(discovered[0]["allow"]["channels"], [{"id": "43", "name": "partner"}])
+
+    def test_discovered_campaign_keeps_the_site_category_slug(self):
+        entry = available_drops_entry()
+        entry["game"] = {"id": "1", "name": "Pokémon GO", "displayName": "Pokémon GO"}
+        game = {"name": "pokémon go", "displayName": "pokémon go", "slug": "pokemon-go"}
+        with patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns", return_value={"42": [entry]}
+        ), patch.object(
+            Twitch, "get_drops_enabled_channels", return_value=[("42", "first")]
+        ):
+            discovered, _, _ = self.twitch._Twitch__discover_campaigns(
+                [], [], drop_games=[game]
+            )
+        self.assertEqual(discovered[0]["game"]["slug"], "pokemon-go")
 
     def test_earned_campaign_does_not_end_the_category_search(self):
         earned = available_drops_entry("earned")
@@ -1200,7 +1216,7 @@ class CampaignDiscoveryTests(unittest.TestCase):
             side_effect=lambda ch: {cid: offers[cid] for cid in ch},
         ), patch.object(
             Twitch, "get_drops_enabled_channels",
-            side_effect=lambda game: channels[game["slug"]],
+            side_effect=lambda game, limit=1: channels[game["slug"]],
         ):
             discovered, probed, categories = self.twitch._Twitch__discover_campaigns(
                 [], [], drop_games=games,
