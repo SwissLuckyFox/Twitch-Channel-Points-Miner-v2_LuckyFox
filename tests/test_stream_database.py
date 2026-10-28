@@ -79,12 +79,22 @@ class StreamDatabaseTests(unittest.TestCase):
                     }
                 ),
                 "/twitch/global-badges/seegson/1": page({"availabilities": [availability()]}),
+                "/twitch/global-badges/clip/1": page(
+                    {"availabilities": [dict(availability(), objectives=[[{"type": "twitch_clip"}]])]}
+                ),
             }
         )
 
         badges = fetch_watch_badges(session=session, now=NOW)
 
-        self.assertEqual(session.requested, ["/twitch/global-badges", "/twitch/global-badges/seegson/1"])
+        self.assertEqual(
+            session.requested,
+            [
+                "/twitch/global-badges",
+                "/twitch/global-badges/seegson/1",
+                "/twitch/global-badges/clip/1",
+            ],
+        )
         self.assertEqual(len(badges), 1)
         badge = badges[0]
         self.assertEqual(badge.minutes, 30)
@@ -121,6 +131,35 @@ class StreamDatabaseTests(unittest.TestCase):
         fetch_watch_badges(session=session, now=NOW)
         fetch_watch_badges(session=session, now=NOW)
         self.assertEqual(session.requested.count("/twitch/global-badges/seegson/1"), 1)
+
+    def test_running_badge_without_watch_words_uses_detail_objectives(self):
+        # Real case: "True Damage Fan" says "earned by supporting the ... World
+        # Championship" but its detail page requires 30 minutes of watching.
+        session = FakeSession(
+            {
+                "/twitch/global-badges": page(
+                    {
+                        "initialTwitchGlobalBadges": [
+                            list_item(
+                                "true-damage-fan",
+                                "earned by supporting the 2026 League of Legends World Championship!",
+                            )
+                        ]
+                    }
+                ),
+                "/twitch/global-badges/true-damage-fan/1": page(
+                    {"availabilities": [availability()]}
+                ),
+            }
+        )
+        badges = fetch_watch_badges(session=session, now=NOW)
+        self.assertEqual([b.set_id for b in badges], ["true-damage-fan"])
+
+    def test_undated_badge_still_needs_watch_words(self):
+        item = list_item("old", "earned by supporting", start=None, end=None)
+        self.assertFalse(StreamDatabase._is_candidate(item, NOW))
+        item = list_item("new", "earned by watching", start=None, end=None)
+        self.assertTrue(StreamDatabase._is_candidate(item, NOW))
 
     def test_non_watch_objectives_are_skipped(self):
         other = availability()

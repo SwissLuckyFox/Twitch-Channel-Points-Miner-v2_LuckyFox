@@ -252,6 +252,15 @@ def _campaign_from_available_drops(data, channel_entry, linked=True):
     }
 
 
+def _claimed_benefits(inventory):
+    """Benefit id -> lastAwardedAt for rewards listed in the inventory's gameEventDrops."""
+    return {
+        event["id"]: parse_twitch_datetime(event.get("lastAwardedAt"))
+        for event in (inventory.get("gameEventDrops") or [])
+        if isinstance(event, dict) and event.get("id")
+    }
+
+
 def _drop_key(drop):
     # A badge can be offered by several campaigns (Twitch and Stream Database, one per
     # category), so badges are identified by their title instead of the drop id.
@@ -487,6 +496,7 @@ class Twitch(object):
         "twilight_build_id_pattern",
         "announced_drops",
         "pending_drops",
+        "earned_reasons",
     ]
 
     def __init__(self, username, user_agent, password=None):
@@ -1522,11 +1532,7 @@ class Twitch(object):
             c for c in (inventory.get("dropCampaignsInProgress") or []) if isinstance(c, dict)
         ]
         # Rewards of already completed campaigns are only listed here (benefit id -> award time).
-        claimed_benefits = {
-            event["id"]: parse_twitch_datetime(event.get("lastAwardedAt"))
-            for event in (inventory.get("gameEventDrops") or [])
-            if isinstance(event, dict) and event.get("id")
-        }
+        claimed_benefits = _claimed_benefits(inventory)
         # Drops still unearned after the previous sync: key -> drop.
         pending = getattr(self, "pending_drops", None) or {}
         owned_badges = (
@@ -1541,14 +1547,32 @@ class Twitch(object):
 
         # Iterate all campaigns from dashboard (only active, with working drops)
         # In this array we have also the campaigns never started from us (not in inventory)
+        earned_reasons = {}
         for campaign in campaigns:
             progress = next((p for p in in_progress if p.get("id") == campaign.id), None)
             if progress is not None:
                 campaign.in_inventory = True
                 campaign.sync_drops(progress.get("timeBasedDrops") or [], self.claim_drop)
+            open_drops = [drop for drop in campaign.drops if not drop.is_claimed]
             campaign.mark_claimed_from_benefits(claimed_benefits)
+            by_history = [drop.name for drop in open_drops if drop.is_claimed]
             for drop in campaign.drops:
                 drop.mark_claimed_from_badges(owned_titles)
+            by_badge = [
+                drop.name
+                for drop in open_drops
+                if drop.is_claimed and drop.name not in by_history
+            ]
+            if by_history or by_badge:
+                reasons = []
+                if by_history:
+                    reasons.append(
+                        "reward already in your Twitch reward history: "
+                        + ", ".join(by_history)
+                    )
+                if by_badge:
+                    reasons.append("badge already owned: " + ", ".join(by_badge))
+                earned_reasons[campaign.id] = "; ".join(reasons)
             if campaign.id.startswith(STREAMDB_PREFIX):
                 set_id = campaign.id[len(STREAMDB_PREFIX) :].rsplit(":", 1)[0]
                 if set_id.strip().lower() in owned_sets:
@@ -1575,6 +1599,7 @@ class Twitch(object):
         self.pending_drops = {
             _drop_key(drop): drop for campaign in campaigns for drop in campaign.drops
         }
+        self.earned_reasons = earned_reasons
         return campaigns
 
     def __announce_earned(self, drop):
@@ -1963,8 +1988,26 @@ class Twitch(object):
                 result.append(data)
         return result
 
-    def __discover_campaigns(self, streamers, known_campaigns, badges=(), drop_games=()):
+    def __discover_campaigns(
+        self,
+        streamers,
+        known_campaigns,
+        badges=(),
+        drop_games=(),
+        claimed_benefits=None,
+        owned_titles=None,
+    ):
         """Check followed/configured channels first, then stop at one usable external channel."""
+        claimed_benefits = claimed_benefits or {}
+        owned = {"titles": owned_titles}
+
+        def owned_badge_titles():
+            # Fetched lazily: only needed when a probed campaign offers a badge.
+            if owned["titles"] is None:
+                result = self.get_owned_badges()
+                owned["titles"] = result[1] if result is not None else set()
+            return owned["titles"]
+
         games = {}
         badge_channels = {}
         for badge in badges:
@@ -2053,6 +2096,13 @@ class Twitch(object):
                             for drop in candidate.drops:
                                 if drop.id == progress.get("id"):
                                     drop.update(progress["self"])
+                    # Same earned checks as __sync_campaigns, so an already earned
+                    # campaign does not end the search for a farmable one.
+                    candidate.mark_claimed_from_benefits(claimed_benefits)
+                    if any(drop.badge_titles for drop in candidate.drops):
+                        titles = owned_badge_titles()
+                        for drop in candidate.drops:
+                            drop.mark_claimed_from_badges(titles)
                     candidate.clear_drops()
                     if (
                         not candidate.dt_match
@@ -2138,6 +2188,7 @@ class Twitch(object):
                         if isinstance(event, dict) and event.get("name")
                     }
                     owned_sets = set()
+                    owned_titles = None
                     if badges:
                         owned = self.get_owned_badges()
                         if owned is not None:
@@ -2158,7 +2209,12 @@ class Twitch(object):
                         }
                     )
                     discovered, probed, categories = self.__discover_campaigns(
-                        streamers, list(known.values()), open_badges, drop_games
+                        streamers,
+                        list(known.values()),
+                        open_badges,
+                        drop_games,
+                        _claimed_benefits(inventory),
+                        owned_titles,
                     )
                     if not self.running:
                         break
@@ -2228,6 +2284,16 @@ class Twitch(object):
 
                 if scan_stats is not None:
                     scan_stats["already_earned"] = sum(not c.drops for c in campaigns)
+                    reasons = getattr(self, "earned_reasons", None) or {}
+                    for campaign in campaigns:
+                        if not campaign.drops and campaign.id in reasons:
+                            logger.info(
+                                "Drop campaign '%s' (%s) counted as earned: %s",
+                                campaign.name,
+                                campaign.game_name(),
+                                reasons[campaign.id],
+                                extra={"emoji": ":mag:", "event": Events.DROP_SCAN},
+                            )
                     logger.info(
                         describe_drop_scan(active_campaigns, scan_stats),
                         extra={"emoji": ":mag:", "event": Events.DROP_SCAN},

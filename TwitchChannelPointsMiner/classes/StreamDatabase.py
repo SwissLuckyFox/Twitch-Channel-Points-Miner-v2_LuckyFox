@@ -104,8 +104,6 @@ def _is_candidate(item, now):
         return False
     version = ((item.get("current") or {}).get("version")) or {}
     text = f"{version.get('title') or ''} {version.get('description') or ''}"
-    if not _WATCH_WORDS.search(text):
-        return False
     start = _parse_date(item.get("start_at_date"), item.get("start_at_time"))
     end = _parse_date(item.get("end_at_date"), item.get("end_at_time"), end=True)
     if end is not None and end <= now:
@@ -113,8 +111,12 @@ def _is_candidate(item, now):
     if start is not None and start > now:
         return False
     if start is None and end is None:
+        if not _WATCH_WORDS.search(text):
+            return False
         added = parse_twitch_datetime(item.get("added_at") or item.get("created_at"))
         return added is not None and now - added < timedelta(days=RECENT_DAYS)
+    # Running time-limited badges are checked even without "watch" in their text
+    # (e.g. "earned by supporting ..."); the detail objectives decide.
     return True
 
 

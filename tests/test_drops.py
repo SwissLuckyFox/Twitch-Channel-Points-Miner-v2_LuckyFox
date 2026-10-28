@@ -484,6 +484,19 @@ class InventorySyncTests(unittest.TestCase):
         }
         result = self._sync(inventory, [campaign])
         self.assertEqual(result[0].drops, [])
+        self.assertIn("reward history", self.twitch.earned_reasons["campaign-1"])
+
+    def test_owned_badge_reason_is_recorded(self):
+        campaign = Campaign(campaign_data([drop_data()]))
+        self._sync(
+            {"dropCampaignsInProgress": [], "gameEventDrops": []},
+            [campaign],
+            owned_badges=(set(), {"alien: isolation horror"}),
+        )
+        self.assertEqual(
+            self.twitch.earned_reasons,
+            {"campaign-1": "badge already owned: Watch to Redeem"},
+        )
 
     def test_unstarted_campaign_keeps_its_drops(self):
         campaign = Campaign(campaign_data([drop_data()]))
@@ -1086,6 +1099,9 @@ class CampaignDiscoveryTests(unittest.TestCase):
     def setUp(self):
         self.twitch = object.__new__(Twitch)
         self.twitch.running = True
+        patcher = patch.object(Twitch, "get_owned_badges", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _live_streamer(self, name, channel_id):
         streamer = Streamer(name)
@@ -1171,6 +1187,46 @@ class CampaignDiscoveryTests(unittest.TestCase):
         available.assert_called_once_with({"42": "first"})
         self.assertEqual(probed, 1)
         self.assertEqual(discovered[0]["allow"]["channels"], [{"id": "42", "name": "first"}])
+
+    def test_earned_campaign_does_not_end_the_category_search(self):
+        earned = available_drops_entry("earned")
+        fresh = available_drops_entry("fresh")
+        fresh["timeBasedDrops"][0]["benefitEdges"][0]["benefit"]["id"] = "benefit-2"
+        offers = {"42": [earned], "43": [fresh]}
+        games = [{"name": "Overwatch", "slug": "overwatch-2"}, {"name": "B", "slug": "b"}]
+        channels = {"overwatch-2": [("42", "first")], "b": [("43", "second")]}
+        with patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns",
+            side_effect=lambda ch: {cid: offers[cid] for cid in ch},
+        ), patch.object(
+            Twitch, "get_drops_enabled_channels",
+            side_effect=lambda game: channels[game["slug"]],
+        ):
+            discovered, probed, categories = self.twitch._Twitch__discover_campaigns(
+                [], [], drop_games=games,
+                claimed_benefits={"benefit-1": datetime.utcnow()},
+            )
+        self.assertEqual([c["id"] for c in discovered], ["fresh"])
+        self.assertEqual(probed, 2)
+        self.assertEqual(categories, ["B", "Overwatch"])
+
+    def test_owned_badge_campaign_does_not_end_the_category_search(self):
+        games = [{"name": "A", "slug": "a"}, {"name": "B", "slug": "b"}]
+        with patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns",
+            return_value={"42": [available_drops_entry()]},
+        ), patch.object(
+            Twitch, "get_drops_enabled_channels", return_value=[("42", "first")]
+        ), patch.object(
+            Twitch, "get_owned_badges",
+            return_value=(set(), {"alien: isolation horror"}),
+        ) as owned:
+            discovered, _, categories = self.twitch._Twitch__discover_campaigns(
+                [], [], drop_games=games
+            )
+        self.assertEqual(discovered, [])
+        self.assertEqual(categories, ["A", "B"])
+        owned.assert_called_once_with()
 
     def test_followed_drop_is_checked_before_badge_named_channels(self):
         own = self._live_streamer("mine", "1")
