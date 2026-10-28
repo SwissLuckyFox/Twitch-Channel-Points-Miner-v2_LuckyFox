@@ -1225,6 +1225,30 @@ class CampaignDiscoveryTests(unittest.TestCase):
         self.assertEqual([c["id"] for c in discovered], ["albion"])
         self.assertEqual(probed, 2)
 
+    def test_inventory_campaign_in_category_does_not_end_search(self):
+        # Log: "14 started in your inventory; ... checked in Hunt: Showdown 1896,
+        # Overwatch" then all 14 dropped. Inventory campaigns are judged by the main
+        # sync, so only a new campaign may end the category search.
+        inventory = campaign_data([drop_data()])
+        inventory["id"] = "hunt"
+        hunt = available_drops_entry("hunt")
+        fresh = available_drops_entry("albion", "777")
+        offers = {"42": [hunt], "43": [fresh]}
+        games = [{"name": "Hunt", "slug": "hunt"}, {"name": "Albion", "slug": "albion"}]
+        channels = {"hunt": [("42", "hunter")], "albion": [("43", "partner")]}
+        with patch.object(
+            Twitch, "_Twitch__get_available_drop_campaigns",
+            side_effect=lambda ch: {cid: offers[cid] for cid in ch},
+        ), patch.object(
+            Twitch, "get_drops_enabled_channels",
+            side_effect=lambda game, limit=1: channels.get(game["slug"], []),
+        ):
+            discovered, probed, categories = self.twitch._Twitch__discover_campaigns(
+                [], [inventory], drop_games=games
+            )
+        self.assertEqual([c["id"] for c in discovered], ["albion"])
+        self.assertEqual(probed, 2)
+
     def test_earned_campaign_does_not_end_the_category_search(self):
         earned = available_drops_entry("earned")
         fresh = available_drops_entry("fresh")
@@ -1302,18 +1326,17 @@ class CampaignDiscoveryTests(unittest.TestCase):
         self.assertEqual(probed, 2)
         self.assertEqual([c["id"] for c in discovered], ["other"])
 
-    def test_known_followed_campaign_records_confirmed_channel_without_search(self):
+    def test_known_followed_campaign_records_confirmed_channel(self):
         own = self._live_streamer("mine", "1")
         with patch.object(
             Twitch, "_Twitch__get_available_drop_campaigns",
             return_value={"1": [available_drops_entry()]},
-        ), patch.object(Twitch, "get_drops_enabled_channels") as directory:
+        ), patch.object(Twitch, "get_drops_enabled_channels", return_value=[]):
             discovered, _, _ = self.twitch._Twitch__discover_campaigns(
                 [own], [campaign_data([drop_data()])]
             )
         self.assertEqual(discovered, [])
         self.assertEqual(own.stream.campaigns_ids, ["campaign-1"])
-        directory.assert_not_called()
 
     def test_followed_inventory_target_survives_omitted_channel_campaign(self):
         own = self._live_streamer("mine", "1")

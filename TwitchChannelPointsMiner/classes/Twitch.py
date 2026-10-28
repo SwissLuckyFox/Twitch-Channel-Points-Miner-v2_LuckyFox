@@ -1998,6 +1998,7 @@ class Twitch(object):
         claimed_benefits=None,
         owned_titles=None,
         skip=None,
+        known_badge_titles=None,
     ):
         """
         Check followed/configured channels first, then stop at one usable external channel.
@@ -2062,7 +2063,9 @@ class Twitch(object):
         discovered = {}
         checked = set()
         categories = []
-        badge_titles = {badge.title.strip().lower() for badge in badges}
+        badge_titles = {badge.title.strip().lower() for badge in badges} | set(
+            known_badge_titles or ()
+        )
 
         def probe(channels, category=None):
             channels = {cid: login for cid, login in channels.items() if cid not in checked}
@@ -2128,9 +2131,12 @@ class Twitch(object):
                         or (Settings.require_linked_account and not candidate.is_eligible)
                     ):
                         continue
-                    usable = True
                     if campaign_id in known:
+                        # Inventory campaigns are judged by the main sync (claims,
+                        # awarded rewards, owned badges); a second, slightly different
+                        # check here ended the search for campaigns it later dropped.
                         continue
+                    usable = True
                     if campaign_id in discovered:
                         discovered[campaign_id]["allow"]["channels"].append(
                             {"id": channel_id, "name": channels[channel_id]}
@@ -2234,6 +2240,7 @@ class Twitch(object):
                         _claimed_benefits(inventory),
                         owned_titles,
                         progression.manages if progression is not None else None,
+                        known_badge_titles,
                     )
                     if not self.running:
                         break
