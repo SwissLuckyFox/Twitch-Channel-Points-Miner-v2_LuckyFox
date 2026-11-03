@@ -3,7 +3,7 @@ import os
 import tempfile
 import time
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 import TwitchChannelPointsMiner.classes.Twitch as twitch_module
@@ -79,6 +79,39 @@ class DropFilterTests(unittest.TestCase):
                 self.assertEqual(len(bar), 20)
                 self.assertEqual(bar.count("\u2588"), percent // 5)
                 self.assertEqual(bar.count(" "), 20 - percent // 5)
+
+    def test_drop_is_active_until_its_utc_end(self):
+        data = drop_data()
+        data["endAt"] = (
+            datetime.now(timezone.utc) + timedelta(hours=1)
+        ).strftime(FMT)
+        self.assertTrue(Drop(data).dt_match)
+
+    def test_drop_with_zero_minutes_reports_zero_progress(self):
+        drop = Drop(drop_data(minutes=0))
+        drop.update(
+            {
+                "hasPreconditionsMet": True,
+                "currentMinutesWatched": 3,
+                "dropInstanceID": None,
+                "isClaimed": False,
+            }
+        )
+        self.assertEqual(drop.percentage_progress, 0)
+        self.assertFalse(drop.is_printable)
+
+    def test_overshoot_never_breaks_the_progress_bar(self):
+        drop = Drop(drop_data(minutes=30))
+        drop.update(
+            {
+                "hasPreconditionsMet": True,
+                "currentMinutesWatched": 33,
+                "dropInstanceID": None,
+                "isClaimed": False,
+            }
+        )
+        self.assertEqual(drop.percentage_progress, 100)
+        self.assertEqual(drop.progress_bar().count("\u2588"), 20)
 
     def test_progress_bar_uses_percentage_not_watched_minutes(self):
         for minutes, watched in ((120, 108), (30, 27)):
@@ -192,6 +225,13 @@ class DropFilterTests(unittest.TestCase):
 
 
 class ClaimedBenefitTests(unittest.TestCase):
+    def test_campaign_is_active_after_its_utc_start(self):
+        data = campaign_data([drop_data()])
+        data["startAt"] = (
+            datetime.now(timezone.utc) - timedelta(hours=1)
+        ).strftime(FMT)
+        self.assertTrue(Campaign(data).dt_match)
+
     def test_reward_awarded_during_campaign_marks_drop_claimed(self):
         drop = Drop(drop_data())
         drop.mark_claimed_from_benefits({"benefit-1": datetime.now()})
@@ -406,6 +446,109 @@ class ClaimDropMessageTests(unittest.TestCase):
         self.claim(False)
         restarted = Twitch.__new__(Twitch)
         self.assertFalse(self.notified(self.claim(False, twitch=restarted)))
+
+
+class InventoryClaimTests(unittest.TestCase):
+    def setUp(self):
+        self.twitch = Twitch.__new__(Twitch)
+        patcher = patch.object(Settings, "analytics_path", None, create=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _claimable(self):
+        drop = drop_data(drop_id="claimable")
+        drop["self"] = {
+            "hasPreconditionsMet": True,
+            "currentMinutesWatched": 30,
+            "dropInstanceID": "instance-1",
+            "isClaimed": False,
+        }
+        return drop
+
+    def test_startup_claim_claims_only_claimable_drops(self):
+        inventory = {
+            "dropCampaignsInProgress": [
+                {"id": "c1", "timeBasedDrops": [self._claimable()]},
+                {"id": "c2", "timeBasedDrops": []},
+                {"id": "c3"},
+                {"id": "c4", "timeBasedDrops": ["not-a-dict"]},
+                {"id": "c5", "timeBasedDrops": [None]},
+            ]
+        }
+        with patch.object(
+            Twitch, "_Twitch__get_inventory", return_value=inventory
+        ), patch.object(Twitch, "claim_drop", return_value=True) as claim, patch(
+            "TwitchChannelPointsMiner.classes.Twitch.time.sleep"
+        ) as sleep, patch.object(twitch_module.logger, "debug"):
+            self.twitch.claim_all_drops_from_inventory()
+        claim.assert_called_once()
+        self.assertEqual(claim.call_args.args[0].id, "claimable")
+        sleep.assert_called_once()
+
+    def test_malformed_inventory_entries_are_skipped(self):
+        broken = drop_data(drop_id="broken")
+        del broken["endAt"]
+        inventory = {
+            "dropCampaignsInProgress": [
+                {"id": "c1", "timeBasedDrops": [broken]},
+                {"id": "c2", "timeBasedDrops": [drop_data(drop_id="no-self")]},
+            ]
+        }
+        with patch.object(
+            Twitch, "_Twitch__get_inventory", return_value=inventory
+        ), patch.object(Twitch, "claim_drop") as claim, patch.object(
+            twitch_module.logger, "debug"
+        ):
+            self.twitch.claim_all_drops_from_inventory()
+        claim.assert_not_called()
+
+    def test_subscription_gated_drop_is_not_claimed(self):
+        sub = drop_data(drop_id="sub", minutes=0, subs=1)
+        sub["self"] = {
+            "hasPreconditionsMet": True,
+            "currentMinutesWatched": 0,
+            "dropInstanceID": None,
+            "isClaimed": False,
+        }
+        inventory = {
+            "dropCampaignsInProgress": [
+                {"id": "c1", "timeBasedDrops": [sub]},
+            ]
+        }
+        with patch.object(
+            Twitch, "_Twitch__get_inventory", return_value=inventory
+        ), patch.object(Twitch, "claim_drop") as claim:
+            self.twitch.claim_all_drops_from_inventory()
+        claim.assert_not_called()
+
+    def test_empty_inventory_is_a_noop(self):
+        for inventory in ({}, {"dropCampaignsInProgress": None}, None):
+            with self.subTest(inventory=inventory), patch.object(
+                Twitch, "_Twitch__get_inventory", return_value=inventory
+            ), patch.object(Twitch, "claim_drop") as claim:
+                self.twitch.claim_all_drops_from_inventory()
+            claim.assert_not_called()
+
+    def test_claim_request_without_data_fails_gracefully(self):
+        drop = Drop(drop_data())
+        drop.drop_instance_id = "instance"
+        for response in (None, {}, {"errors": []}, {"data": None}, ["x"],
+                         {"data": {"claimDropRewards": None}},
+                         {"data": {"errors": ["something"]}}):
+            with self.subTest(response=response), patch.object(
+                Twitch, "post_gql_request", return_value=response
+            ):
+                self.assertFalse(self.twitch._Twitch__request_claim_drop(drop))
+
+    def test_claim_request_accepts_eligible_statuses(self):
+        drop = Drop(drop_data())
+        drop.drop_instance_id = "instance"
+        for status in ("ELIGIBLE_FOR_ALL", "DROP_INSTANCE_ALREADY_CLAIMED"):
+            response = {"data": {"claimDropRewards": {"status": status}}}
+            with self.subTest(status=status), patch.object(
+                Twitch, "post_gql_request", return_value=response
+            ):
+                self.assertTrue(self.twitch._Twitch__request_claim_drop(drop))
 
 
 class DropsConditionTests(unittest.TestCase):

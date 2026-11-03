@@ -56,6 +56,9 @@ from TwitchChannelPointsMiner.utils import (
 
 logger = logging.getLogger(__name__)
 
+# Full campaign/inventory rebuild. New drops are only discovered in this scan,
+# so a long interval can leave the miner farming an old drop for up to an hour.
+CAMPAIGN_SCAN_INTERVAL = 30 * 60
 # Game-directory lookup for drop campaigns that accept any participating channel.
 DIRECTORY_SEARCH_INTERVAL = 10 * 60
 DIRECTORY_SEARCH_LIMIT = 1
@@ -1689,36 +1692,67 @@ class Twitch(object):
         json_data = copy.deepcopy(GQLOperations.DropsPage_ClaimDropRewards)
         json_data["variables"] = {"input": {"dropInstanceID": drop.drop_instance_id}}
         response = self.post_gql_request(json_data)
+        data = response.get("data") if isinstance(response, dict) else None
+        if not isinstance(data, dict):
+            logger.debug(
+                "Drop claim request returned no data.%s",
+                _graphql_error_details(response),
+            )
+            return False
         try:
             # response["data"]["claimDropRewards"] can be null and respose["data"]["errors"] != []
             # or response["data"]["claimDropRewards"]["status"] === DROP_INSTANCE_ALREADY_CLAIMED
-            if ("claimDropRewards" in response["data"]) and (
-                response["data"]["claimDropRewards"] is None
-            ):
+            if ("claimDropRewards" in data) and (data["claimDropRewards"] is None):
                 return False
-            elif ("errors" in response["data"]) and (response["data"]["errors"] != []):
+            elif ("errors" in data) and (data["errors"] != []):
                 return False
-            elif ("claimDropRewards" in response["data"]) and (
-                response["data"]["claimDropRewards"]["status"]
+            elif ("claimDropRewards" in data) and (
+                data["claimDropRewards"]["status"]
                 in ["ELIGIBLE_FOR_ALL", "DROP_INSTANCE_ALREADY_CLAIMED"]
             ):
                 return True
             else:
                 return False
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, TypeError):
             return False
 
     def claim_all_drops_from_inventory(self):
-        inventory = self.__get_inventory()
-        if inventory not in [None, {}]:
-            if inventory["dropCampaignsInProgress"] not in [None, {}]:
-                for campaign in inventory["dropCampaignsInProgress"]:
-                    for drop_dict in campaign["timeBasedDrops"]:
-                        drop = Drop(drop_dict)
-                        drop.update(drop_dict["self"])
-                        if drop.is_claimable is True:
-                            drop.is_claimed = self.claim_drop(drop)
-                            time.sleep(random.uniform(5, 10))
+        """Claim every claimable drop the inventory lists (startup helper).
+
+        The inventory can contain malformed or subscription-gated entries; each
+        one is handled separately so a single bad entry cannot abort the startup
+        pass.
+        """
+        inventory = self.__get_inventory() or {}
+        campaigns = inventory.get("dropCampaignsInProgress")
+        if not isinstance(campaigns, list):
+            return
+        for campaign in campaigns:
+            if not isinstance(campaign, dict):
+                continue
+            for drop_dict in campaign.get("timeBasedDrops") or []:
+                if not isinstance(drop_dict, dict):
+                    continue
+                try:
+                    drop = Drop(drop_dict)
+                except (KeyError, TypeError, ValueError) as error:
+                    logger.debug("Skipping unreadable drop in the inventory: %r", error)
+                    continue
+                progress = drop_dict.get("self")
+                if not isinstance(progress, dict):
+                    continue
+                try:
+                    drop.update(progress)
+                except (KeyError, TypeError) as error:
+                    logger.debug(
+                        "Skipping drop '%s' without readable progress: %r",
+                        drop.name,
+                        error,
+                    )
+                    continue
+                if drop.is_claimable is True:
+                    drop.is_claimed = self.claim_drop(drop)
+                    time.sleep(random.uniform(5, 10))
 
     def get_drops_enabled_channels(self, game, limit=DIRECTORY_SEARCH_LIMIT):
         """Return [(channel_id, login)] of live, drops-enabled streams for a campaign game."""
@@ -2183,10 +2217,10 @@ class Twitch(object):
         while self.running:
             scan_stats = None
             try:
-                # Get update from dashboard each 60minutes
+                # Full campaign/inventory rebuild; new drops are only discovered here.
                 if (
                     campaigns_update == 0
-                    or ((time.time() - campaigns_update) / 60) > 60
+                    or (time.time() - campaigns_update) > CAMPAIGN_SCAN_INTERVAL
                 ):
                     campaigns_update = time.time()
                     # External sites supply discovery hints; Twitch confirms

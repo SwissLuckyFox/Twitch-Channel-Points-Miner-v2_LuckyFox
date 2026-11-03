@@ -56,6 +56,21 @@ class TwitchDropsTests(unittest.TestCase):
             with self.subTest(html=html), self.assertRaises(ValueError):
                 self.fetch(html)
 
+    def test_one_malformed_card_does_not_hide_valid_cards(self):
+        games = self.fetch(
+            '<div id="grid">' + card(end="invalid") + card() + card(start="x")
+            + card("valid", "Still Valid") + "</div>"
+        )
+        self.assertEqual(
+            [game["slug"] for game in games], ["hunt-showdown", "valid"]
+        )
+
+    def test_page_with_only_malformed_cards_reports_failure(self):
+        with self.assertRaises(ValueError):
+            self.fetch(
+                '<div id="grid">' + card(end="invalid") + card(slug="../x") + "</div>"
+            )
+
     def test_http_and_network_failures_propagate(self):
         session = Mock()
         session.get.side_effect = requests.exceptions.Timeout()

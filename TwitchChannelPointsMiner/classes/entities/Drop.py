@@ -1,10 +1,15 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from TwitchChannelPointsMiner.classes.Settings import Settings
 from TwitchChannelPointsMiner.utils import percentage
 
 # Drop progress is reported every PROGRESS_STEP percent.
 PROGRESS_STEP = 10
+
+
+def utc_now():
+    """Current time as a naive UTC datetime, matching Twitch's timestamps."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def parse_twitch_datetime(value):
@@ -87,7 +92,7 @@ class Drop(object):
         self.start_at = parse_twitch_datetime(data["startAt"])
         if self.end_at is None or self.start_at is None:
             raise ValueError(f"Drop {self.id} has no valid start/end date")
-        self.dt_match = self.start_at < datetime.now() < self.end_at
+        self.dt_match = self.start_at < utc_now() < self.end_at
 
     @property
     def is_watchable(self):
@@ -128,9 +133,17 @@ class Drop(object):
     ):
         self.has_preconditions_met = progress["hasPreconditionsMet"]
 
-        updated_percentage = percentage(
-            progress["currentMinutesWatched"], self.minutes_required
+        # Subscription-gated drops can list zero required minutes; they can never
+        # earn watch progress, so their percentage stays at zero instead of
+        # dividing by zero.
+        updated_percentage = (
+            percentage(progress["currentMinutesWatched"], self.minutes_required)
+            if self.minutes_required > 0
+            else 0
         )
+        # Twitch can briefly report more watched minutes than required; keep the
+        # progress bar at most full.
+        updated_percentage = min(updated_percentage, 100)
         # Report when progress crosses a new 10% step, or when a new drop starts (first
         # minute). A previous value of 0 otherwise means the drop was just (re)loaded, which
         # is not reported again.

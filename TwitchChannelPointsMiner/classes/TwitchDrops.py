@@ -21,6 +21,7 @@ class _GameParser(HTMLParser):
         self.games = {}
         self.card = None
         self.cards_seen = 0
+        self.bad_cards = 0
         self.grid_depth = 0
 
     def handle_starttag(self, tag, attrs):
@@ -33,6 +34,8 @@ class _GameParser(HTMLParser):
             or "game-card" not in (attrs.get("class") or "").split()
         ):
             return
+        # One broken card must not hide every other campaign; only a page where
+        # every card is unreadable is reported as a format change.
         self.cards_seen += 1
         slug = attrs.get("data-slug") or ""
         name = attrs.get("data-game") or ""
@@ -40,12 +43,18 @@ class _GameParser(HTMLParser):
         try:
             end = float(attrs["data-end-ts"]) / 1000
         except (KeyError, TypeError, ValueError):
-            raise ValueError("twitchdrops.app game card has no valid end time")
+            self.bad_cards += 1
+            self.card = None
+            return
         if not re.fullmatch(r"[a-z0-9-]+", slug) or not name or start is None:
-            raise ValueError("twitchdrops.app game card has no valid category/start time")
+            self.bad_cards += 1
+            self.card = None
+            return
         end_at = datetime.fromtimestamp(end, timezone.utc).replace(tzinfo=None)
         if start <= self.now < end_at:
             self.card = {"name": name, "displayName": name, "slug": slug}
+        else:
+            self.card = None
 
     def handle_data(self, data):
         # Ignore subscription-only cards. This is a discovery hint, not proof
@@ -75,6 +84,11 @@ def fetch_drop_games(session=None, now=None):
     if not parser.cards_seen:
         raise ValueError(
             "twitchdrops.app returned no game cards; page format may have changed"
+        )
+    if parser.bad_cards == parser.cards_seen:
+        raise ValueError(
+            "twitchdrops.app returned only unreadable game cards; page format may "
+            "have changed"
         )
     games = list(parser.games.values())
     logger.debug("twitchdrops.app: %s active watch-drop categories", len(games))
