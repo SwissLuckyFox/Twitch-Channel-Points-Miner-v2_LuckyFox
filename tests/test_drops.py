@@ -1238,6 +1238,79 @@ class AvailableDropsCampaignTests(unittest.TestCase):
         self.assertIsNone(twitch_module._campaign_from_available_drops(no_drops, {"id": "1"}))
 
 
+class BadgeFallbackTests(unittest.TestCase):
+    def test_unrelated_campaign_in_same_category_does_not_hide_badge(self):
+        badge = WatchBadge(
+            "diamond-chain", "Diamond Chain", 60,
+            [{"id": "1867279146", "name": "Grand Theft Auto VI", "slug": None}],
+            [], datetime.now() - timedelta(days=1), datetime.now() + timedelta(days=1),
+        )
+        existing = campaign_data([drop_data()])
+        existing["game"] = {"id": "1867279146", "displayName": "Grand Theft Auto VI"}
+        existing["timeBasedDrops"][0]["benefitEdges"][0]["benefit"]["name"] = "GTA DVD Chest"
+        twitch = object.__new__(Twitch)
+
+        fallback = twitch._Twitch__badge_fallback_campaigns([badge], [existing], {})
+
+        self.assertEqual(len(fallback), 1)
+        self.assertEqual(fallback[0]["game"]["id"], "1867279146")
+        self.assertEqual(fallback[0]["timeBasedDrops"][0]["name"], "Diamond Chain")
+
+    def test_active_matching_badge_in_same_category_suppresses_fallback(self):
+        badge = WatchBadge(
+            "diamond-chain", "Diamond Chain", 60,
+            [{"id": "1867279146", "name": "Grand Theft Auto VI", "slug": None}],
+            [], datetime.now() - timedelta(days=1), datetime.now() + timedelta(days=1),
+        )
+        existing = campaign_data([drop_data()])
+        existing["game"] = {"id": "1867279146", "displayName": "Grand Theft Auto VI"}
+        existing["timeBasedDrops"][0]["benefitEdges"][0]["benefit"]["name"] = "Diamond Chain"
+        twitch = object.__new__(Twitch)
+
+        self.assertEqual(
+            twitch._Twitch__badge_fallback_campaigns([badge], [existing], {}), []
+        )
+
+    def test_expired_matching_campaign_does_not_hide_badge(self):
+        badge = WatchBadge(
+            "diamond-chain", "Diamond Chain", 60,
+            [{"id": "1867279146", "name": "Grand Theft Auto VI", "slug": None}],
+            [], datetime.now() - timedelta(days=1), datetime.now() + timedelta(days=1),
+        )
+        existing = campaign_data([drop_data()])
+        existing["game"] = {"id": "1867279146", "displayName": "Grand Theft Auto VI"}
+        existing["timeBasedDrops"][0]["benefitEdges"][0]["benefit"]["name"] = "Diamond Chain"
+        existing["endAt"] = _ts(-1)
+        twitch = object.__new__(Twitch)
+
+        self.assertEqual(
+            len(twitch._Twitch__badge_fallback_campaigns([badge], [existing], {})), 1
+        )
+
+    def test_fallback_searches_the_badges_own_category(self):
+        badge = WatchBadge(
+            "diamond-chain", "Diamond Chain", 60,
+            [{"id": "1867279146", "name": "Grand Theft Auto VI", "slug": None}],
+            [], datetime.now() - timedelta(days=1), datetime.now() + timedelta(days=1),
+        )
+        special_events = campaign_data([drop_data()], channels=[{"id": "99"}])
+        special_events["game"] = {"id": "1", "displayName": "Special Events"}
+        twitch = object.__new__(Twitch)
+        fallback = twitch._Twitch__badge_fallback_campaigns([badge], [special_events], {})
+        campaign = Campaign(fallback[0])
+        response = {
+            "data": {"game": {"streams": {"edges": [
+                {"node": {"broadcaster": {"id": "42", "login": "laphin"}}}
+            ]}}}
+        }
+        channels = {}
+        with patch.object(Twitch, "post_gql_request", return_value=response) as post:
+            twitch._Twitch__discover_directory_channels(campaign, [], {}, channels)
+
+        self.assertEqual(post.call_args.args[0]["variables"]["slug"], "grand-theft-auto-vi")
+        self.assertEqual(channels[campaign.id], {"42"})
+
+
 class CampaignDiscoveryTests(unittest.TestCase):
     def setUp(self):
         self.twitch = object.__new__(Twitch)

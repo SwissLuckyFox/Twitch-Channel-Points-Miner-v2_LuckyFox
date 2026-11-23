@@ -278,9 +278,8 @@ def _drop_key(drop):
 
 def _campaigns_from_badge(badge):
     """
-    Campaign data for a running Stream Database watch badge, one per category, used when
-    Twitch's own AvailableDrops did not confirm a campaign in that category. Watching starts
-    the real campaign in the inventory, which then takes over.
+    Campaign data for a running Stream Database watch badge, one per category.
+    Watching may start the real campaign in the inventory, which then takes over.
     """
     if not badge.games or badge.start_at is None or badge.end_at is None:
         return []
@@ -1999,19 +1998,32 @@ class Twitch(object):
         return set_ids, titles
 
     def __badge_fallback_campaigns(self, badges, campaigns_data, first_offered):
-        """Campaigns for running badges whose categories Twitch did not confirm."""
-        covered_games = {
-            str(data["game"]["id"])
-            for data in campaigns_data
-            if isinstance(data.get("game"), dict) and data["game"].get("id")
-        }
+        """Campaigns for running badges not already represented by a Twitch campaign."""
+        badge_titles = {badge.title.strip().lower() for badge in badges}
+        covered_badges = set()
+        for data in campaigns_data:
+            game = data.get("game")
+            if not isinstance(game, dict) or not game.get("id"):
+                continue
+            try:
+                campaign = Campaign(data, badge_titles)
+            except (KeyError, TypeError, ValueError) as error:
+                logger.debug("Skipping unreadable drop campaign: %r", error)
+                continue
+            if not campaign.dt_match:
+                continue
+            for drop in campaign.drops:
+                if drop.dt_match:
+                    covered_badges.update(
+                        (str(game["id"]), title) for title in drop.badge_titles
+                    )
         now = time.time()
         result = []
         for badge in badges:
             if not badge.is_running():
                 continue
             for data in _campaigns_from_badge(badge):
-                if data["game"]["id"] in covered_games:
+                if (str(data["game"]["id"]), badge.title.strip().lower()) in covered_badges:
                     continue
                 first = first_offered.setdefault(data["id"], now)
                 if now - first > STREAMDB_FALLBACK_SECONDS:
