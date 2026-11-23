@@ -88,6 +88,8 @@ class StreakWatchLoopTests(unittest.TestCase):
             return current
 
         def stop(*args, **kwargs):
+            if not twitch.running:
+                return
             twitch.running = False
             if after_request is not None:
                 after_request()
@@ -113,9 +115,8 @@ class StreakWatchLoopTests(unittest.TestCase):
         self.assertEqual(len(targets), 1)
         return targets[0]
 
-    def test_streak_priority_uses_eight_minute_cutoff(self):
-        self.assertEqual(WATCH_STREAK_MINUTES, 8)
-        for minutes, expected in [(7, True), (7.99, True), (8, False)]:
+    def test_streak_priority_uses_fifteen_watched_minute_cutoff(self):
+        for minutes, expected in [(8, True), (14.99, True), (15, False)]:
             with self.subTest(minutes=minutes):
                 alice = online("alice")
                 alice.settings.watch_streak = True
@@ -123,11 +124,69 @@ class StreakWatchLoopTests(unittest.TestCase):
                 targets = self.run_iteration([alice], [Priority.STREAK])
                 self.assertEqual("alice" in targets, expected)
 
+    def test_recently_restarted_stream_gets_streak_priority(self):
+        alice = online("alice")
+        alice.settings.watch_streak = True
+        alice.stream.minute_watched = 10
+        with patch.object(Streamer, "toggle_chat"), patch.object(
+            Streamer, "__str__", lambda self: self.username
+        ):
+            alice.set_offline()
+            alice.set_online()
+        alice.online_at -= 31
+        self.assertEqual(alice.stream.minute_watched, 0)
+        self.assertEqual(
+            self.run_iteration([alice], [Priority.STREAK]),
+            {"alice": (alice, STREAK)},
+        )
+
     def test_confirmed_streak_releases_priority_before_cutoff(self):
         alice = online("alice")
         alice.settings.watch_streak = True
-        alice.stream.watch_streak_missing = False
+        alice.update_history("WATCH_STREAK", 450)
         self.assertEqual(self.run_iteration([alice], [Priority.STREAK]), {})
+
+    def test_new_streak_waits_for_current_streaks_to_finish(self):
+        alice, bob, carol = online("alice"), online("bob"), online("carol")
+        for streamer in (alice, bob, carol):
+            streamer.settings.watch_streak = True
+        alice.is_online = False
+        twitch = Twitch.__new__(Twitch)
+        twitch.running = True
+        twitch.user_agent = "test"
+        targets = []
+
+        def report_targets(previous, current):
+            targets.append(current)
+            if len(targets) == 1:
+                alice.is_online = True
+            elif len(targets) == 2:
+                bob.update_history("WATCH_STREAK", 450)
+            elif len(targets) == 3:
+                twitch.running = False
+            return current
+
+        clock = iter(range(1000, 100000, 60))
+        with patch.object(
+            Twitch, "_Twitch__log_watch_targets", side_effect=report_targets
+        ), patch.object(
+            Twitch, "_Twitch__report_video"
+        ), patch.object(
+            Streamer, "__str__", lambda self: self.username
+        ), patch(
+            "TwitchChannelPointsMiner.classes.Twitch.requests.post",
+            return_value=Mock(status_code=204),
+        ), patch(
+            "TwitchChannelPointsMiner.classes.Twitch.time.time",
+            side_effect=lambda: next(clock),
+        ):
+            twitch.send_minute_watched_events(
+                [alice, bob, carol], [Priority.STREAK]
+            )
+
+        self.assertEqual(list(targets[0]), ["bob", "carol"])
+        self.assertEqual(list(targets[1]), ["bob", "carol"])
+        self.assertEqual(list(targets[2]), ["carol", "alice"])
 
     def test_finished_auto_drop_channel_is_not_selected_by_other_priorities(self):
         for priority in (

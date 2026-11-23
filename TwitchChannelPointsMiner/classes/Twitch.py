@@ -79,8 +79,7 @@ STREAM_PLAYLIST_TTL = 5 * 60
 STREAM_CHUNKS_PER_LOAD = 20
 # Drops whose claim was already announced on Telegram/Discord (kept across restarts).
 ANNOUNCED_DROPS_LIMIT = 1000
-# Seven watched minutes plus a one-minute buffer for Twitch's progress tracking.
-WATCH_STREAK_MINUTES = 8
+WATCH_STREAK_MINUTES = 15
 
 
 def _graphql_error_details(response):
@@ -1085,26 +1084,17 @@ class Twitch(object):
                             reasons.setdefault(index, WATCH_REASONS[prior])
 
                     elif prior == Priority.STREAK and len(streamers_watching) < 2:
-                        """
-                        Give eligible streaks priority until the reward is confirmed
-                        or eight watched minutes have been recorded (including a
-                        one-minute safety margin).
-                        Viewers receive points for returning for x consecutive streams.
-                        Each stream must be at least 10 minutes long and it must have been at least 30 minutes since the last stream ended.
-                        """
-                        for index in streamers_index:
+                        streak_indices = sorted(
+                            streamers_index,
+                            key=lambda index: last_targets.get(
+                                streamers[index].username, (None, None)
+                            )[1] != WATCH_REASONS[Priority.STREAK],
+                        )
+                        for index in streak_indices:
                             if (
                                 index not in streamers_watching
                                 and streamers[index].settings.watch_streak is True
                                 and streamers[index].stream.watch_streak_missing is True
-                                and (
-                                    streamers[index].offline_at == 0
-                                    or (
-                                        (time.time() - streamers[index].offline_at)
-                                        // 60
-                                    )
-                                    > 30
-                                )
                                 and streamers[index].stream.minute_watched
                                 < WATCH_STREAK_MINUTES
                             ):
