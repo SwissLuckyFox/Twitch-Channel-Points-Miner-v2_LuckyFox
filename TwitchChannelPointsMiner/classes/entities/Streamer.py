@@ -120,6 +120,7 @@ class Streamer(object):
 
     def set_offline(self):
         self.stream.pause_minute_watched()
+        self.stream.pause_watch_monitor()
         went_offline = self.is_online is True
         if went_offline:
             self.offline_at = time.time()
@@ -167,6 +168,8 @@ class Streamer(object):
         self.history[reason_code]["counter"] += counter
         self.history[reason_code]["amount"] += earned
 
+        if reason_code in ("WATCH", "WATCH_STREAK"):
+            self.stream.confirm_watch()
         if reason_code == "WATCH_STREAK":
             self.stream.watch_streak_missing = False
 

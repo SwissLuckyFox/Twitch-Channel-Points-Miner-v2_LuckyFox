@@ -2,6 +2,7 @@ import json
 import logging
 import time
 from base64 import b64encode
+from threading import Lock
 
 from TwitchChannelPointsMiner.classes.Settings import Settings
 from TwitchChannelPointsMiner.constants import DROP_ID
@@ -25,6 +26,9 @@ class Stream(object):
         "minute_watched",
         "__last_update",
         "__minute_watched_timestamp",
+        "__watch_monitor_lock",
+        "__watch_monitor_since",
+        "__watch_retries",
     ]
 
     def __init__(self):
@@ -44,6 +48,7 @@ class Stream(object):
         self.spade_url = None
         self.payload = None
 
+        self.__watch_monitor_lock = Lock()
         self.init_watch_streak()
 
     def encode_payload(self) -> dict:
@@ -96,6 +101,37 @@ class Stream(object):
         self.watch_streak_missing = True
         self.minute_watched = 0
         self.pause_minute_watched()
+        with self.__watch_monitor_lock:
+            self.__watch_monitor_since = None
+            self.__watch_retries = 0
+
+    def start_watch_monitor(self):
+        with self.__watch_monitor_lock:
+            if self.__watch_monitor_since is None:
+                self.__watch_monitor_since = time.monotonic()
+
+    def pause_watch_monitor(self):
+        with self.__watch_monitor_lock:
+            self.__watch_monitor_since = None
+
+    def confirm_watch(self):
+        with self.__watch_monitor_lock:
+            if self.__watch_monitor_since is not None:
+                self.__watch_monitor_since = time.monotonic()
+
+    def watch_retry_due(self, interval, max_retries):
+        with self.__watch_monitor_lock:
+            if (
+                self.__watch_monitor_since is None
+                or self.__watch_retries >= max_retries
+            ):
+                return None
+            now = time.monotonic()
+            if now - self.__watch_monitor_since < interval:
+                return None
+            self.__watch_retries += 1
+            self.__watch_monitor_since = now
+            return self.__watch_retries
 
     def pause_minute_watched(self):
         self.__minute_watched_timestamp = None

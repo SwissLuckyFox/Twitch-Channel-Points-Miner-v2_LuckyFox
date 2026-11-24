@@ -17,6 +17,7 @@ from TwitchChannelPointsMiner.classes.entities.Streamer import (
     Streamer,
     StreamerSettings,
 )
+from TwitchChannelPointsMiner.classes.entities.Stream import Stream
 
 STREAK = WATCH_REASONS[Priority.STREAK]
 SUB = WATCH_REASONS[Priority.SUBSCRIBED]
@@ -276,6 +277,8 @@ class StreakWatchLoopTests(unittest.TestCase):
         with patch(
             "TwitchChannelPointsMiner.classes.entities.Stream.time.monotonic",
             side_effect=[0, 60, 660, 720],
+        ), patch.object(Stream, "start_watch_monitor"), patch.object(
+            Stream, "watch_retry_due", return_value=None
         ):
             alice.stream.update_minute_watched()
             alice.stream.update_minute_watched()
@@ -301,6 +304,8 @@ class StreakWatchLoopTests(unittest.TestCase):
                 with patch(
                     "TwitchChannelPointsMiner.classes.entities.Stream.time.monotonic",
                     side_effect=[0, 60, 660],
+                ), patch.object(Stream, "start_watch_monitor"), patch.object(
+                    Stream, "watch_retry_due", return_value=None
                 ):
                     alice.stream.update_minute_watched()
                     alice.stream.update_minute_watched()
@@ -314,6 +319,40 @@ class StreakWatchLoopTests(unittest.TestCase):
                         [alice], [Priority.ORDER], response, after_request=resume
                     )
                     self.assertEqual(observed, [1])
+
+    def test_missing_watch_confirmation_reloads_playback_at_most_twice(self):
+        alice = online("alice")
+        twitch = Twitch.__new__(Twitch)
+        twitch.running = True
+        twitch.user_agent = "test"
+        clock = [0]
+        reloads = []
+
+        def load_video(streamer, cache):
+            if streamer.username not in cache:
+                reloads.append(clock[0])
+                cache[streamer.username] = ("playlist", clock[0])
+            return True
+
+        def sleep(seconds, chunk_size):
+            clock[0] += seconds
+            if clock[0] >= 1200:
+                twitch.running = False
+
+        with patch.object(Twitch, "load_stream_segment", side_effect=load_video), \
+             patch.object(Twitch, "_Twitch__chuncked_sleep", side_effect=sleep), \
+             patch.object(Streamer, "__str__", lambda self: self.username), \
+             patch("TwitchChannelPointsMiner.classes.Twitch.requests.post",
+                   return_value=Mock(status_code=204)), \
+             patch("time.time", side_effect=lambda: clock[0]), \
+             patch("time.monotonic", side_effect=lambda: clock[0]), \
+             self.assertLogs("TwitchChannelPointsMiner.classes.Twitch", "WARNING") as logs:
+            twitch.send_minute_watched_events([alice], [Priority.ORDER])
+
+        self.assertEqual(reloads, [0, 360, 720])
+        self.assertIn("retry 1/2", logs.output[0])
+        self.assertIn("retry 2/2", logs.output[1])
+        self.assertIn("no further retries", logs.output[1])
 
 
 class RecheckOfflineStreamersTests(unittest.TestCase):

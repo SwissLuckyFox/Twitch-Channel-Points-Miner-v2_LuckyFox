@@ -57,6 +57,47 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(stream.minute_watched, 0)
         self.assertTrue(stream.watch_streak_missing)
 
+    def test_watch_confirmation_restarts_six_minute_timer(self):
+        streamer = Streamer("someone")
+        clock = [0]
+        with patch("time.monotonic", side_effect=lambda: clock[0]):
+            streamer.stream.start_watch_monitor()
+            clock[0] = 359
+            self.assertIsNone(streamer.stream.watch_retry_due(360, 2))
+            streamer.update_history("WATCH", 10)
+            clock[0] = 718
+            self.assertIsNone(streamer.stream.watch_retry_due(360, 2))
+            clock[0] = 719
+            self.assertEqual(streamer.stream.watch_retry_due(360, 2), 1)
+            streamer.update_history("WATCH_STREAK", 450)
+            self.assertFalse(streamer.stream.watch_streak_missing)
+            clock[0] = 1078
+            self.assertIsNone(streamer.stream.watch_retry_due(360, 2))
+            clock[0] = 1079
+            self.assertEqual(streamer.stream.watch_retry_due(360, 2), 2)
+            clock[0] = 1440
+            self.assertIsNone(streamer.stream.watch_retry_due(360, 2))
+
+    def test_watch_monitor_pauses_and_new_stream_resets_retry_limit(self):
+        stream = Stream()
+        clock = [0]
+        with patch("time.monotonic", side_effect=lambda: clock[0]):
+            stream.start_watch_monitor()
+            clock[0] = 360
+            self.assertEqual(stream.watch_retry_due(360, 2), 1)
+            stream.pause_watch_monitor()
+            clock[0] = 1000
+            self.assertIsNone(stream.watch_retry_due(360, 2))
+            stream.start_watch_monitor()
+            clock[0] = 1359
+            self.assertIsNone(stream.watch_retry_due(360, 2))
+            clock[0] = 1360
+            self.assertEqual(stream.watch_retry_due(360, 2), 2)
+            stream.init_watch_streak()
+            stream.start_watch_monitor()
+            clock[0] = 1720
+            self.assertEqual(stream.watch_retry_due(360, 2), 1)
+
     def test_game_id_from_game_dict(self):
         stream = Stream()
         stream.game = {"id": "509658", "name": "Just Chatting"}

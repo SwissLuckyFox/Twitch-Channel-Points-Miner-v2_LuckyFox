@@ -80,6 +80,8 @@ STREAM_CHUNKS_PER_LOAD = 20
 # Drops whose claim was already announced on Telegram/Discord (kept across restarts).
 ANNOUNCED_DROPS_LIMIT = 1000
 WATCH_STREAK_MINUTES = 15
+WATCH_CONFIRMATION_TIMEOUT = 6 * 60
+WATCH_RETRY_LIMIT = 2
 
 
 def _graphql_error_details(response):
@@ -1156,6 +1158,9 @@ class Twitch(object):
                 for index, streamer in enumerate(streamers):
                     if index not in streamers_watching:
                         streamer.stream.pause_minute_watched()
+                        streamer.stream.pause_watch_monitor()
+                    else:
+                        streamer.stream.start_watch_monitor()
                 if drop_streamer is not None and not any(
                     streamers[index] is drop_streamer for index in streamers_watching
                 ):
@@ -1176,6 +1181,23 @@ class Twitch(object):
 
                 for index in streamers_watching:
                     next_iteration = time.time() + 60 / len(streamers_watching)
+                    streamer = streamers[index]
+                    retry = streamer.stream.watch_retry_due(
+                        WATCH_CONFIRMATION_TIMEOUT, WATCH_RETRY_LIMIT
+                    )
+                    if retry is not None:
+                        variant_cache.pop(streamer.username, None)
+                        video_ok.pop(streamer.username, None)
+                        logger.warning(
+                            "No WATCH confirmation for %s in 6 minutes; "
+                            "reloading playback (retry %s/%s)%s",
+                            streamer.username,
+                            retry,
+                            WATCH_RETRY_LIMIT,
+                            "; no further retries this stream"
+                            if retry == WATCH_RETRY_LIMIT
+                            else "",
+                        )
 
                     try:
                         response = requests.post(
@@ -1269,9 +1291,11 @@ class Twitch(object):
             except Exception:
                 for streamer in streamers:
                     streamer.stream.pause_minute_watched()
+                    streamer.stream.pause_watch_monitor()
                 logger.error("Exception raised in send minute watched", exc_info=True)
         for streamer in streamers:
             streamer.stream.pause_minute_watched()
+            streamer.stream.pause_watch_monitor()
 
     # === CHANNEL POINTS / PREDICTION === #
     # Load the amount of current points for a channel, check if a bonus is available
